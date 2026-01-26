@@ -58,6 +58,7 @@ class _BetterPlayerSubtitlesDrawerState
 
     _outerTextStyle = TextStyle(
         fontSize: _configuration!.fontSize,
+        fontWeight: _configuration!.fontWeight,
         fontFamily: _configuration!.fontFamily,
         foreground: Paint()
           ..style = PaintingStyle.stroke
@@ -66,6 +67,7 @@ class _BetterPlayerSubtitlesDrawerState
 
     _innerTextStyle = TextStyle(
         fontFamily: _configuration!.fontFamily,
+        fontWeight: _configuration!.fontWeight,
         color: _configuration!.fontColor,
         fontSize: _configuration!.fontSize);
 
@@ -98,21 +100,24 @@ class _BetterPlayerSubtitlesDrawerState
     final List<Widget> textWidgets =
         subtitles.map((text) => _buildSubtitleTextWidget(text)).toList();
 
-    return Container(
-      height: double.infinity,
-      width: double.infinity,
-      child: Padding(
-        padding: EdgeInsets.only(
-            bottom: _playerVisible
-                ? _configuration!.bottomPadding + 30
-                : _configuration!.bottomPadding,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bottomPadding = _configuration!.bottomPaddingPercent != null
+            ? constraints.maxHeight * _configuration!.bottomPaddingPercent!
+            : _configuration!.bottomPadding;
+
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: _playerVisible ? bottomPadding + 30 : bottomPadding,
             left: _configuration!.leftPadding,
-            right: _configuration!.rightPadding),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: textWidgets,
-        ),
-      ),
+            right: _configuration!.rightPadding,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: textWidgets,
+          ),
+        );
+      },
     );
   }
 
@@ -145,6 +150,7 @@ class _BetterPlayerSubtitlesDrawerState
   Widget _getTextWithStroke(String subtitleText) {
     return Container(
       color: _configuration!.backgroundColor,
+      padding: _configuration!.innerPadding,
       child: Stack(
         children: [
           if (_configuration!.outlineEnabled)

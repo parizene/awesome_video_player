@@ -7,6 +7,9 @@ class BetterPlayerSubtitlesConfiguration {
   ///Subtitle font size
   final double fontSize;
 
+  ///Subtitle font weight
+  final FontWeight fontWeight;
+
   ///Subtitle font color
   final Color fontColor;
 
@@ -28,8 +31,12 @@ class BetterPlayerSubtitlesConfiguration {
   ///Right padding of the subtitle
   final double rightPadding;
 
-  ///Bottom padding of the subtitle
+  ///Bottom padding of the subtitle (fixed pixels)
   final double bottomPadding;
+
+  ///Bottom padding as percentage of video height (0.0 - 1.0)
+  ///Takes precedence over bottomPadding when set
+  final double? bottomPaddingPercent;
 
   ///Alignment of the subtitle
   final Alignment alignment;
@@ -37,11 +44,15 @@ class BetterPlayerSubtitlesConfiguration {
   ///Background color of the subtitle
   final Color backgroundColor;
 
+  ///Inner padding inside the background box
+  final EdgeInsets innerPadding;
+
   /// Enable subtitles. If false, then subtitles will not be displayed.
   final bool enabled;
 
   const BetterPlayerSubtitlesConfiguration({
     this.fontSize = 14,
+    this.fontWeight = FontWeight.normal,
     this.fontColor = Colors.white,
     this.outlineEnabled = true,
     this.outlineColor = Colors.black,
@@ -50,8 +61,14 @@ class BetterPlayerSubtitlesConfiguration {
     this.leftPadding = 8.0,
     this.rightPadding = 8.0,
     this.bottomPadding = 20.0,
+    this.bottomPaddingPercent,
     this.alignment = Alignment.center,
     this.backgroundColor = Colors.transparent,
+    this.innerPadding = EdgeInsets.zero,
     this.enabled = true,
-  });
+  }) : assert(
+          bottomPaddingPercent == null ||
+              (bottomPaddingPercent >= 0.0 && bottomPaddingPercent <= 1.0),
+          'bottomPaddingPercent must be between 0.0 and 1.0',
+        );
 }
