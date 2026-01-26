@@ -334,6 +334,10 @@ internal class BetterPlayer(
         if (playerNotificationManager != null) {
             playerNotificationManager?.setPlayer(null)
         }
+        for ((uuid, observer) in workerObserverMap) {
+            workManager.getWorkInfoByIdLiveData(uuid).removeObserver(observer)
+        }
+        workerObserverMap.clear()
         bitmap = null
     }
 
