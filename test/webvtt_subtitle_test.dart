@@ -81,6 +81,43 @@ Subtitle with metadata.''';
         expect(subtitles[0].texts, equals(['Subtitle with metadata.']));
       });
 
+      test('should handle HLS WebVTT with X-TIMESTAMP-MAP', () {
+        // Given: A WebVTT file with inline comment and X-TIMESTAMP-MAP (common in HLS streams)
+        const webVttContent = '''WEBVTT    #Elemental Media Engine(TM) 2.18.0.0
+X-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:186000
+
+00:00:03.040 --> 00:00:05.040
+First line.
+
+00:00:05.880 --> 00:00:08.360
+Second line.
+
+00:00:08.520 --> 00:00:10.480
+Third line.''';
+
+        // When: Parsing the WebVTT content
+        final subtitles =
+            BetterPlayerSubtitlesFactory.parseString(webVttContent);
+
+        // Then: Should parse exactly 3 subtitles (ignoring header and X-TIMESTAMP-MAP)
+        expect(subtitles.length, equals(3));
+
+        // First subtitle
+        expect(subtitles[0].start, equals(const Duration(milliseconds: 3040)));
+        expect(subtitles[0].end, equals(const Duration(milliseconds: 5040)));
+        expect(subtitles[0].texts, equals(['First line.']));
+
+        // Second subtitle
+        expect(subtitles[1].start, equals(const Duration(milliseconds: 5880)));
+        expect(subtitles[1].end, equals(const Duration(milliseconds: 8360)));
+        expect(subtitles[1].texts, equals(['Second line.']));
+
+        // Third subtitle
+        expect(subtitles[2].start, equals(const Duration(milliseconds: 8520)));
+        expect(subtitles[2].end, equals(const Duration(milliseconds: 10480)));
+        expect(subtitles[2].texts, equals(['Third line.']));
+      });
+
       test('should handle cue settings and styling in WebVTT', () {
         // Given: A WebVTT file with cue settings
         const webVttContent = '''WEBVTT
