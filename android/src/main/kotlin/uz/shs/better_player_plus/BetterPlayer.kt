@@ -12,9 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
+import androidx.media3.session.MediaSession
 import uz.shs.better_player_plus.DataSourceUtils.getUserAgent
 import uz.shs.better_player_plus.DataSourceUtils.isHTTP
 import uz.shs.better_player_plus.DataSourceUtils.getDataSourceFactory
@@ -94,7 +92,7 @@ internal class BetterPlayer(
     private var refreshRunnable: Runnable? = null
     private var exoPlayerEventListener: Player.Listener? = null
     private var bitmap: Bitmap? = null
-    private var mediaSession: MediaSessionCompat? = null
+    private var mediaSession: MediaSession? = null
     private var drmSessionManager: DrmSessionManager? = null
     private val workManager: WorkManager
     private val workerObserverMap: HashMap<UUID, Observer<WorkInfo?>>
@@ -149,40 +147,30 @@ internal class BetterPlayer(
                     httpMediaDrmCallback.setKeyRequestProperty(drmKey, drmValue)
                 }
             }
-            if (Util.SDK_INT < 18) {
-                Log.e(TAG, "Protected content not supported on API levels below 18")
-                drmSessionManager = null
-            } else {
-                val drmSchemeUuid = Util.getDrmUuid("widevine")
-                if (drmSchemeUuid != null) {
-                    drmSessionManager = DefaultDrmSessionManager.Builder()
-                        .setUuidAndExoMediaDrmProvider(
-                            drmSchemeUuid
-                        ) { uuid: UUID? ->
-                            try {
-                                val mediaDrm = FrameworkMediaDrm.newInstance(uuid!!)
-                                // Force L3.
-                                mediaDrm.setPropertyString("securityLevel", "L3")
-                                return@setUuidAndExoMediaDrmProvider mediaDrm
-                            } catch (e: UnsupportedDrmException) {
-                                return@setUuidAndExoMediaDrmProvider DummyExoMediaDrm()
-                            }
+            val drmSchemeUuid = Util.getDrmUuid("widevine")
+            if (drmSchemeUuid != null) {
+                drmSessionManager = DefaultDrmSessionManager.Builder()
+                    .setUuidAndExoMediaDrmProvider(
+                        drmSchemeUuid
+                    ) { uuid: UUID? ->
+                        try {
+                            val mediaDrm = FrameworkMediaDrm.newInstance(uuid!!)
+                            // Force L3.
+                            mediaDrm.setPropertyString("securityLevel", "L3")
+                            return@setUuidAndExoMediaDrmProvider mediaDrm
+                        } catch (e: UnsupportedDrmException) {
+                            return@setUuidAndExoMediaDrmProvider DummyExoMediaDrm()
                         }
-                        .setMultiSession(false)
-                        .build(httpMediaDrmCallback)
-                }
+                    }
+                    .setMultiSession(false)
+                    .build(httpMediaDrmCallback)
             }
         } else if (!clearKey.isNullOrEmpty()) {
-            drmSessionManager = if (Util.SDK_INT < 18) {
-                Log.e(TAG, "Protected content not supported on API levels below 18")
-                null
-            } else {
-                DefaultDrmSessionManager.Builder()
-                    .setUuidAndExoMediaDrmProvider(
-                        C.CLEARKEY_UUID,
-                        FrameworkMediaDrm.DEFAULT_PROVIDER
-                    ).build(LocalMediaDrmCallback(clearKey.toByteArray()))
-            }
+            drmSessionManager = DefaultDrmSessionManager.Builder()
+                .setUuidAndExoMediaDrmProvider(
+                    C.CLEARKEY_UUID,
+                    FrameworkMediaDrm.DEFAULT_PROVIDER
+                ).build(LocalMediaDrmCallback(clearKey.toByteArray()))
         } else {
             drmSessionManager = null
         }
@@ -327,39 +315,9 @@ internal class BetterPlayer(
                 setUseStopAction(false)
             }
 
-            setupMediaSession(context)?.let {
-                setMediaSessionToken(it.sessionToken)
+            setupMediaSession(context)?.let { session ->
+                setMediaSessionToken(session.platformToken)
             }
-        }
-
-        refreshHandler = Handler(Looper.getMainLooper())
-        refreshRunnable = Runnable {
-            val playbackState: PlaybackStateCompat = if (exoPlayer?.isPlaying == true) {
-                PlaybackStateCompat.Builder()
-                    .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                    .setState(PlaybackStateCompat.STATE_PLAYING, position, 1.0f)
-                    .build()
-            } else {
-                PlaybackStateCompat.Builder()
-                    .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                    .setState(PlaybackStateCompat.STATE_PAUSED, position, 1.0f)
-                    .build()
-            }
-            mediaSession?.setPlaybackState(playbackState)
-            refreshHandler?.postDelayed(refreshRunnable!!, 1000)
-        }
-        refreshHandler?.postDelayed(refreshRunnable!!, 0)
-        exoPlayerEventListener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                mediaSession?.setMetadata(
-                    MediaMetadataCompat.Builder()
-                        .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDuration())
-                        .build()
-                )
-            }
-        }
-        exoPlayerEventListener?.let { exoPlayerEventListener ->
-            exoPlayer?.addListener(exoPlayerEventListener)
         }
         exoPlayer?.seekTo(0)
     }
@@ -526,14 +484,11 @@ internal class BetterPlayer(
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun setAudioAttributes(exoPlayer: ExoPlayer?, mixWithOthers: Boolean) {
-        val audioComponent = exoPlayer?.audioComponent ?: return
-        audioComponent.setAudioAttributes(
+        exoPlayer?.setAudioAttributes(
             AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
             !mixWithOthers
         )
-
     }
 
     fun play() {
@@ -628,31 +583,18 @@ internal class BetterPlayer(
      * @return - configured MediaSession instance
      */
     @SuppressLint("InlinedApi")
-    fun setupMediaSession(context: Context?): MediaSessionCompat? {
+    fun setupMediaSession(context: Context?): MediaSession? {
         mediaSession?.release()
         context?.let {
-
-            val mediaButtonIntent = Intent(Intent.ACTION_MEDIA_BUTTON)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                0, mediaButtonIntent,
-                PendingIntent.FLAG_IMMUTABLE
-            )
-            val mediaSession = MediaSessionCompat(context, TAG, null, pendingIntent)
-            mediaSession.setCallback(object : MediaSessionCompat.Callback() {
-                override fun onSeekTo(pos: Long) {
-                    sendSeekToEvent(pos)
-                    super.onSeekTo(pos)
-                }
-            })
-            mediaSession.isActive = true
-//            val mediaSessionConnector = MediaSessionConnector(mediaSession)
-//            mediaSessionConnector.setPlayer(exoPlayer)
-            this.mediaSession = mediaSession
-            return mediaSession
+            exoPlayer?.let { player ->
+                val session = MediaSession.Builder(context, player)
+                    .setId(TAG)
+                    .build()
+                this.mediaSession = session
+                return session
+            }
         }
         return null
-
     }
 
     fun onPictureInPictureStatusChanged(inPip: Boolean) {
