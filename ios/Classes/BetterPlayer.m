@@ -28,6 +28,8 @@ AVPictureInPictureController *_pipController;
     _disposed = false;
     _player = [[AVPlayer alloc] init];
     _player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+    // Ignore iOS accessibility caption settings - Flutter renders subtitles
+    _player.appliesMediaSelectionCriteriaAutomatically = NO;
     ///Fix for loading large videos
     if (@available(iOS 10.0, *)) {
         _player.automaticallyWaitsToMinimizeStalling = false;
