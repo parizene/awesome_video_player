@@ -35,6 +35,12 @@ AVPictureInPictureController *_pipController;
         _player.automaticallyWaitsToMinimizeStalling = false;
     }
     self._observersAdded = false;
+    self.isNaturalSizeLoaded = false;
+    self.isPreferredTransformLoaded = false;
+    self.isDurationLoaded = false;
+    self.cachedDuration = kCMTimeZero;
+    self.isNominalFrameRateLoaded = false;
+    self.cachedNominalFrameRate = 0;
     return self;
 }
 
@@ -80,13 +86,17 @@ AVPictureInPictureController *_pipController;
         return;
     }
 
-    if (_player.currentItem == nil) {
-        return;
-    }
-
     [self removeObservers];
     AVAsset* asset = [_player.currentItem asset];
     [asset cancelLoading];
+    self.isNaturalSizeLoaded = false;
+    self.isPreferredTransformLoaded = false;
+    self.isDurationLoaded = false;
+    self.cachedDuration = kCMTimeZero;
+    self.isNominalFrameRateLoaded = false;
+    self.cachedNominalFrameRate = 0;
+    self.cachedNaturalSize = CGSizeZero;
+    self.cachedPreferredTransform = CGAffineTransformIdentity;
 }
 
 - (void) removeObservers{
@@ -138,31 +148,33 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (AVMutableVideoComposition*)getVideoCompositionWithTransform:(CGAffineTransform)transform
                                                      withAsset:(AVAsset*)asset
-                                                withVideoTrack:(AVAssetTrack*)videoTrack {
+                                                withVideoTrack:(AVAssetTrack*)videoTrack
+                                                      duration:(CMTime)duration
+                                              nominalFrameRate:(float)nominalFrameRate
+                                                   naturalSize:(CGSize)naturalSize {
     AVMutableVideoCompositionInstruction* instruction =
     [AVMutableVideoCompositionInstruction videoCompositionInstruction];
-    instruction.timeRange = CMTimeRangeMake(kCMTimeZero, [asset duration]);
+    instruction.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
     AVMutableVideoCompositionLayerInstruction* layerInstruction =
     [AVMutableVideoCompositionLayerInstruction
      videoCompositionLayerInstructionWithAssetTrack:videoTrack];
-    [layerInstruction setTransform:_preferredTransform atTime:kCMTimeZero];
+    [layerInstruction setTransform:transform atTime:kCMTimeZero];
 
     AVMutableVideoComposition* videoComposition = [AVMutableVideoComposition videoComposition];
     instruction.layerInstructions = @[ layerInstruction ];
     videoComposition.instructions = @[ instruction ];
 
     // If in portrait mode, switch the width and height of the video
-    CGFloat width = videoTrack.naturalSize.width;
-    CGFloat height = videoTrack.naturalSize.height;
+    CGFloat width = naturalSize.width;
+    CGFloat height = naturalSize.height;
     NSInteger rotationDegrees =
-    (NSInteger)round(radiansToDegrees(atan2(_preferredTransform.b, _preferredTransform.a)));
+    (NSInteger)round(radiansToDegrees(atan2(transform.b, transform.a)));
     if (rotationDegrees == 90 || rotationDegrees == 270) {
-        width = videoTrack.naturalSize.height;
-        height = videoTrack.naturalSize.width;
+        width = naturalSize.height;
+        height = naturalSize.width;
     }
     videoComposition.renderSize = CGSizeMake(width, height);
 
-    float nominalFrameRate = videoTrack.nominalFrameRate;
     int fps = 30;
     if (nominalFrameRate > 0) {
         fps = (int) ceil(nominalFrameRate);
@@ -249,34 +261,78 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
     AVAsset* asset = [item asset];
     void (^assetCompletionHandler)(void) = ^{
-        if ([asset statusOfValueForKey:@"tracks" error:nil] == AVKeyValueStatusLoaded) {
+        if ([asset statusOfValueForKey:@"tracks" error:nil] == AVKeyValueStatusLoaded &&
+            [asset statusOfValueForKey:@"duration" error:nil] == AVKeyValueStatusLoaded) {
+            
+            CMTime assetDuration = [asset duration];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.cachedDuration = assetDuration;
+                self.isDurationLoaded = true;
+            });
+            
             NSArray* tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
             if ([tracks count] > 0) {
                 AVAssetTrack* videoTrack = tracks[0];
                 void (^trackCompletionHandler)(void) = ^{
                     if (self->_disposed) return;
                     if ([videoTrack statusOfValueForKey:@"preferredTransform"
+                                                  error:nil] == AVKeyValueStatusLoaded &&
+                        [videoTrack statusOfValueForKey:@"naturalSize"
+                                                  error:nil] == AVKeyValueStatusLoaded &&
+                        [videoTrack statusOfValueForKey:@"nominalFrameRate"
                                                   error:nil] == AVKeyValueStatusLoaded) {
-                        // Rotate the video by using a videoComposition and the preferredTransform
-                        self->_preferredTransform = [self fixTransform:videoTrack];
+                        
+                        // Prepare values on background thread
+                        CGAffineTransform preferredTransform = [self fixTransform:videoTrack];
+                        CGSize naturalSize = videoTrack.naturalSize;
+                        float nominalFrameRate = videoTrack.nominalFrameRate;
+
                         // Note:
                         // https://developer.apple.com/documentation/avfoundation/avplayeritem/1388818-videocomposition
                         // Video composition can only be used with file-based media and is not supported for
                         // use with media served using HTTP Live Streaming.
                         AVMutableVideoComposition* videoComposition =
-                        [self getVideoCompositionWithTransform:self->_preferredTransform
+                        [self getVideoCompositionWithTransform:preferredTransform
                                                      withAsset:asset
-                                                withVideoTrack:videoTrack];
+                                                withVideoTrack:videoTrack
+                                                      duration:assetDuration
+                                              nominalFrameRate:nominalFrameRate
+                                                   naturalSize:naturalSize];
                         item.videoComposition = videoComposition;
+                        
+                        // Dispatch property updates to main queue for thread safety
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            self.cachedPreferredTransform = preferredTransform;
+                            self.cachedNaturalSize = naturalSize;
+                            self.cachedNominalFrameRate = nominalFrameRate;
+                            self.isPreferredTransformLoaded = true;
+                            self.isNaturalSizeLoaded = true;
+                            self.isNominalFrameRateLoaded = true;
+                            
+                            if (self->_player.status == AVPlayerStatusReadyToPlay) {
+                                [self onReadyToPlay];
+                            }
+                        });
                     }
                 };
-                [videoTrack loadValuesAsynchronouslyForKeys:@[ @"preferredTransform" ]
+                [videoTrack loadValuesAsynchronouslyForKeys:@[ @"preferredTransform", @"naturalSize", @"nominalFrameRate" ]
                                           completionHandler:trackCompletionHandler];
+            } else {
+                // Audio-only or no video tracks
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.isPreferredTransformLoaded = true;
+                    self.isNaturalSizeLoaded = true;
+                    self.isNominalFrameRateLoaded = true;
+                    
+                    if (self->_player.status == AVPlayerStatusReadyToPlay) {
+                        [self onReadyToPlay];
+                    }
+                });
             }
         }
     };
 
-    [asset loadValuesAsynchronouslyForKeys:@[ @"tracks" ] completionHandler:assetCompletionHandler];
+    [asset loadValuesAsynchronouslyForKeys:@[ @"tracks", @"duration" ] completionHandler:assetCompletionHandler];
     [self addObservers:item];
 }
 
@@ -451,32 +507,51 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         if (_player.status != AVPlayerStatusReadyToPlay) {
             return;
         }
+        
+        // Fix: Ensure all async properties are loaded before proceeding.
+        // This prevents blocking the main thread with synchronous property access.
+        if (!self.isNaturalSizeLoaded || !self.isPreferredTransformLoaded || !self.isDurationLoaded) {
+            return;
+        }
 
         CGSize size = [_player currentItem].presentationSize;
         CGFloat width = size.width;
         CGFloat height = size.height;
 
+        // Calculate the final dimensions that would be sent to Flutter
+        CGSize naturalSize = self.cachedNaturalSize;
+        CGAffineTransform prefTrans = self.cachedPreferredTransform;
+        CGSize realSize = CGSizeApplyAffineTransform(naturalSize, prefTrans);
+        CGFloat finalWidth = fabs(realSize.width) > 0 ? realSize.width : width;
+        CGFloat finalHeight = fabs(realSize.height) > 0 ? realSize.height : height;
 
-        AVAsset *asset = _player.currentItem.asset;
-        bool onlyAudio =  [[asset tracksWithMediaType:AVMediaTypeVideo] count] == 0;
+        // For HLS/streaming, tracks array may be empty initially even for video content,
+        // causing cachedNaturalSize to be 0x0. Wait for presentationSize KVO to provide
+        // valid dimensions before sending initialized event to Flutter.
+        // However, for local audio-only files, dimensions are legitimately 0x0.
+        if (finalWidth == 0 && finalHeight == 0) {
+            // Check if this is streaming content (HTTP/HTTPS URL)
+            BOOL isStreaming = NO;
+            AVAsset *asset = _player.currentItem.asset;
+            if ([asset isKindOfClass:[AVURLAsset class]]) {
+                NSURL *url = ((AVURLAsset *)asset).URL;
+                NSString *scheme = [url scheme];
+                isStreaming = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
+            }
 
-        // The player has not yet initialized.
-        if (!onlyAudio && height == CGSizeZero.height && width == CGSizeZero.width) {
-            return;
+            if (isStreaming) {
+                // Streaming content with no dimensions - wait for presentationSize KVO
+                return;
+            }
+            // Local file with no dimensions - audio-only content, proceed
         }
-        const BOOL isLive = CMTIME_IS_INDEFINITE([_player currentItem].duration);
+        const BOOL isLive = CMTIME_IS_INDEFINITE(self.cachedDuration);
         // The player may be initialized but still needs to determine the duration.
         if (isLive == false && [self duration] == 0) {
             return;
         }
 
-        //Fix from https://github.com/flutter/flutter/issues/66413
-        AVPlayerItemTrack *track = [self.player currentItem].tracks.firstObject;
-        CGSize naturalSize = track.assetTrack.naturalSize;
-        CGAffineTransform prefTrans = track.assetTrack.preferredTransform;
-        CGSize realSize = CGSizeApplyAffineTransform(naturalSize, prefTrans);
-
-        int64_t duration = [BetterPlayerTimeUtils FLTCMTimeToMillis:(_player.currentItem.asset.duration)];
+        int64_t duration = [BetterPlayerTimeUtils FLTCMTimeToMillis:(self.cachedDuration)];
         if (_overriddenDuration > 0 && duration > _overriddenDuration){
             _player.currentItem.forwardPlaybackEndTime = CMTimeMake(_overriddenDuration/1000, 1);
         }
@@ -485,9 +560,9 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         [self updatePlayingState];
         _eventSink(@{
             @"event" : @"initialized",
-            @"duration" : @([self duration]),
-            @"width" : @(fabs(realSize.width) ? : width),
-            @"height" : @(fabs(realSize.height) ? : height),
+            @"duration" : @(duration),
+            @"width" : @(finalWidth),
+            @"height" : @(finalHeight),
             @"key" : _key
         });
     }
@@ -515,7 +590,9 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (int64_t)duration {
     CMTime time;
-    if (@available(iOS 13, *)) {
+    if (self.isDurationLoaded) {
+        time = self.cachedDuration;
+    } else if (@available(iOS 13, *)) {
         time =  [[_player currentItem] duration];
     } else {
         time =  [[[_player currentItem] asset] duration];

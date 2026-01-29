@@ -35,6 +35,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) float playerRate;
 @property(nonatomic) int overriddenDuration;
 @property(nonatomic) AVPlayerTimeControlStatus lastAvPlayerTimeControlStatus;
+@property(nonatomic) CGSize cachedNaturalSize;
+@property(nonatomic) CGAffineTransform cachedPreferredTransform;
+@property(nonatomic) CMTime cachedDuration;
+@property(nonatomic) float cachedNominalFrameRate;
+@property(nonatomic) bool isNaturalSizeLoaded;
+@property(nonatomic) bool isPreferredTransformLoaded;
+@property(nonatomic) bool isDurationLoaded;
+@property(nonatomic) bool isNominalFrameRateLoaded;
 - (void)play;
 - (void)pause;
 - (void)setIsLooping:(bool)isLooping;
