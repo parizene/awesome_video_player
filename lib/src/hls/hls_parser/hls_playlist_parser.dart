@@ -122,6 +122,10 @@ class HlsPlaylistParser {
         .where((line) => line.trim().isNotEmpty) // ignore: always_specify_types
         .toList();
 
+    if (lineList.isEmpty) {
+      throw UnrecognizedInputFormatException('Empty playlist', uri);
+    }
+
     if (!_checkPlaylistHeader(lineList[0])) {
       throw UnrecognizedInputFormatException(
           'Input does not start with the #EXTM3U header.', uri);

@@ -195,6 +195,11 @@ This file has no actual subtitle cues''';
         expect(subtitles.length, equals(0));
       });
 
+      test('should handle completely empty string', () {
+        final subtitles = BetterPlayerSubtitlesFactory.parseString('');
+        expect(subtitles, isEmpty);
+      });
+
       test('should handle malformed WebVTT gracefully', () {
         // Given: A malformed WebVTT file
         const webVttContent = '''WEBVTT
