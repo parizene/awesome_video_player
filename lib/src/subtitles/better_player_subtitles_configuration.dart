@@ -7,6 +7,12 @@ class BetterPlayerSubtitlesConfiguration {
   ///Subtitle font size
   final double fontSize;
 
+  ///Is subtitles visible during PiP.
+  final bool pipEnable;
+
+  ///Subtitle font size when playing in Picture-in-Picture mode.
+  final double? pipFontSize;
+
   ///Subtitle font weight
   final FontWeight fontWeight;
 
@@ -52,6 +58,8 @@ class BetterPlayerSubtitlesConfiguration {
 
   const BetterPlayerSubtitlesConfiguration({
     this.fontSize = 14,
+    this.pipEnable = true,
+    this.pipFontSize,
     this.fontWeight = FontWeight.normal,
     this.fontColor = Colors.white,
     this.outlineEnabled = true,

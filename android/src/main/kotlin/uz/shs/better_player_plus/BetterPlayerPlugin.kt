@@ -80,9 +80,13 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     override fun onDetachedFromActivityForConfigChanges() {}
 
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {}
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
 
-    override fun onDetachedFromActivity() {}
+    override fun onDetachedFromActivity() {
+        activity = null
+    }
 
     private fun disposeAllPlayers() {
         for (i in 0 until videoPlayers.size()) {
@@ -434,9 +438,10 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     private fun enablePictureInPicture(player: BetterPlayer) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val currentActivity = activity ?: return
             player.setupMediaSession(flutterState!!.applicationContext)
-            activity!!.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(
-                Rational(16, 9)
+            currentActivity.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(
+                Rational(9,16)
             ).build())
             startPictureInPictureListenerTimer(player)
             player.onPictureInPictureStatusChanged(true)
@@ -445,7 +450,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     private fun disablePictureInPicture(player: BetterPlayer) {
         stopPipHandler()
-        activity!!.moveTaskToBack(false)
+        activity?.moveTaskToBack(false)
         player.onPictureInPictureStatusChanged(false)
         player.disposeMediaSession()
     }
@@ -454,12 +459,13 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             pipHandler = Handler(Looper.getMainLooper())
             pipRunnable = Runnable {
-                if (activity!!.isInPictureInPictureMode) {
-                    pipHandler!!.postDelayed(pipRunnable!!, 100)
-                } else {
+                val currentActivity = activity
+                if (currentActivity == null || !currentActivity.isInPictureInPictureMode) {
                     player.onPictureInPictureStatusChanged(false)
                     player.disposeMediaSession()
                     stopPipHandler()
+                } else {
+                    pipHandler!!.postDelayed(pipRunnable!!, 100)
                 }
             }
             pipHandler!!.post(pipRunnable!!)
