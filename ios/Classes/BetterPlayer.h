@@ -29,6 +29,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) int failedCount;
 @property(nonatomic) AVPlayerLayer* _playerLayer;
 @property(nonatomic) bool _pictureInPicture;
+@property(nonatomic, nullable) AVPlayerLayer* _pipSupportLayer;
+@property(nonatomic) bool _pipStartRequested;
+@property(nonatomic, nullable) BetterPlayerView* playerView;
+#if TARGET_OS_IOS
+@property(nonatomic, nullable) API_AVAILABLE(ios(9.0)) AVPictureInPictureController* pipController;
+@property(nonatomic, copy, nullable) void (^restorePIPCompletionHandler)(BOOL);
+#endif
+@property(nonatomic, assign) BOOL isObservingReadyForDisplay;
 @property(nonatomic) bool _observersAdded;
 @property(nonatomic) int stalledCount;
 @property(nonatomic) bool isStalledCheckStarted;
