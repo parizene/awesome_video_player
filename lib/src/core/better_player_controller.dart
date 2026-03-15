@@ -118,6 +118,13 @@ class BetterPlayerController {
   ///Was player playing before automatic pause.
   bool? _wasPlayingBeforePause;
 
+  ///Whether the player is currently in Picture-in-Picture mode.
+  bool _isInPictureInPicture = false;
+
+  ///Debounce timer for visibility-based pause to avoid spurious pauses during
+  ///PiP transitions.
+  Timer? _visibilityPauseTimer;
+
   ///Currently used translations
   BetterPlayerTranslations translations = BetterPlayerTranslations();
 
@@ -471,7 +478,8 @@ class BetterPlayerController {
               _betterPlayerDataSource?.notificationConfiguration?.activityName,
           clearKey: _betterPlayerDataSource?.drmConfiguration?.clearKey,
           videoExtension: _betterPlayerDataSource!.videoExtension,
-          allowedScreenSleep: _betterPlayerDataSource?.allowedScreenSleep ?? betterPlayerConfiguration.allowedScreenSleep,
+          allowedScreenSleep: _betterPlayerDataSource?.allowedScreenSleep ??
+              betterPlayerConfiguration.allowedScreenSleep,
         );
 
         break;
@@ -518,7 +526,8 @@ class BetterPlayerController {
               activityName: _betterPlayerDataSource
                   ?.notificationConfiguration?.activityName,
               clearKey: _betterPlayerDataSource?.drmConfiguration?.clearKey,
-              allowedScreenSleep: _betterPlayerDataSource?.allowedScreenSleep ?? betterPlayerConfiguration.allowedScreenSleep);
+              allowedScreenSleep: _betterPlayerDataSource?.allowedScreenSleep ??
+                  betterPlayerConfiguration.allowedScreenSleep);
           _tempFiles.add(file);
         } else {
           throw ArgumentError("Couldn't create file from memory.");
@@ -556,8 +565,9 @@ class BetterPlayerController {
         enterFullScreen();
       }
       if (_isAutomaticPlayPauseHandled()) {
-        if (_appLifecycleState == AppLifecycleState.resumed &&
-            _isPlayerVisible) {
+        if ((_appLifecycleState == AppLifecycleState.resumed &&
+                _isPlayerVisible) ||
+            _isInPictureInPicture) {
           await play();
         } else {
           _wasPlayingBeforePause = true;
@@ -614,7 +624,8 @@ class BetterPlayerController {
       throw StateError("The data source has not been initialized");
     }
 
-    if (_appLifecycleState == AppLifecycleState.resumed) {
+    if (_appLifecycleState == AppLifecycleState.resumed ||
+        _isInPictureInPicture) {
       await videoPlayerController!.play();
       _hasCurrentDataSourceStarted = true;
       _wasPlayingBeforePause = null;
@@ -781,7 +792,7 @@ class BetterPlayerController {
     if (currentVideoPlayerValue.isPip) {
       _wasInPipMode = true;
     } else if (_wasInPipMode) {
-      _postEvent(BetterPlayerEvent(BetterPlayerEventType.pipStop));
+      // pipStop event is posted in _handleVideoEvent to avoid duplicates.
       _wasInPipMode = false;
       if (!_wasInFullScreenBeforePiP) {
         exitFullScreen();
@@ -790,6 +801,11 @@ class BetterPlayerController {
         setControlsEnabled(true);
       }
       videoPlayerController?.refresh();
+      // Only resume if the player was still playing when PiP closed.
+      // If the user paused inside PiP, respect that and stay paused.
+      if (isPlaying() == true) {
+        videoPlayerController?.play();
+      }
     }
 
     if (_betterPlayerSubtitlesSource?.asmsIsSegmented == true) {
@@ -937,9 +953,20 @@ class BetterPlayerController {
             .playerVisibilityChangedBehavior!(visibilityFraction);
       } else {
         if (visibilityFraction == 0) {
-          _wasPlayingBeforePause ??= isPlaying();
-          pause();
+          // Skip pause when in PiP; debounce to avoid spurious pauses during
+          // the PiP→normal transition animation.
+          if (!_isInPictureInPicture) {
+            _visibilityPauseTimer?.cancel();
+            _visibilityPauseTimer =
+                Timer(const Duration(milliseconds: 300), () {
+              if (!_isPlayerVisible && !_isInPictureInPicture) {
+                _wasPlayingBeforePause ??= isPlaying();
+                pause();
+              }
+            });
+          }
         } else {
+          _visibilityPauseTimer?.cancel();
           if (_wasPlayingBeforePause == true && !isPlaying()!) {
             play();
           }
@@ -1014,11 +1041,13 @@ class BetterPlayerController {
     if (_isAutomaticPlayPauseHandled()) {
       _appLifecycleState = appLifecycleState;
       if (appLifecycleState == AppLifecycleState.resumed) {
-        if (_wasPlayingBeforePause == true && _isPlayerVisible) {
+        if (_wasPlayingBeforePause == true &&
+            (_isPlayerVisible || _isInPictureInPicture)) {
           play();
         }
       }
-      if (appLifecycleState == AppLifecycleState.paused) {
+      if (appLifecycleState == AppLifecycleState.paused &&
+          !_isInPictureInPicture) {
         _wasPlayingBeforePause ??= isPlaying();
         pause();
       }
@@ -1071,7 +1100,8 @@ class BetterPlayerController {
         await videoPlayerController?.enablePictureInPicture(
             left: 0, top: 0, width: 0, height: 0);
         enterFullScreen();
-        _postEvent(BetterPlayerEvent(BetterPlayerEventType.pipStart));
+        // pipStart is emitted by _handleVideoEvent when the native side sends the
+        // onPictureInPictureStatusChanged(true) event — no manual post needed here.
         return;
       }
       if (Platform.isIOS) {
@@ -1163,9 +1193,15 @@ class BetterPlayerController {
       case VideoEventType.bufferingEnd:
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
         break;
+      case VideoEventType.pipStart:
+        _isInPictureInPicture = true;
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.pipStart));
+        break;
+      case VideoEventType.pipStop:
+        _isInPictureInPicture = false;
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.pipStop));
+        break;
       default:
-
-        ///TODO: Handle when needed
         break;
     }
   }
@@ -1293,6 +1329,7 @@ class BetterPlayerController {
       }
       _eventListeners.clear();
       _nextVideoTimer?.cancel();
+      _visibilityPauseTimer?.cancel();
       _nextVideoTimeStreamController.close();
       _controlsVisibilityStreamController.close();
       _videoEventStreamSubscription?.cancel();

@@ -42,7 +42,6 @@ static void* readyForDisplayContext = &readyForDisplayContext;
     if (!_playerView) {
         _playerView = [[BetterPlayerView alloc] initWithFrame:CGRectZero];
         _playerView.player = _player;
-
         self._playerLayer = _playerView.playerLayer;
     }
     return _playerView;
@@ -70,6 +69,10 @@ static void* readyForDisplayContext = &readyForDisplayContext;
                                                  selector:@selector(itemDidPlayToEndTime:)
                                                      name:AVPlayerItemDidPlayToEndTimeNotification
                                                    object:item];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleAudioSessionInterruption:)
+                                                     name:AVAudioSessionInterruptionNotification
+                                                   object:[AVAudioSession sharedInstance]];
         self._observersAdded = true;
     }
 }
@@ -80,6 +83,14 @@ static void* readyForDisplayContext = &readyForDisplayContext;
     _disposed = false;
     _failedCount = 0;
     _key = nil;
+    // Reset PiP state so stale flags don't auto-start PiP on a new data source.
+    self._pipStartRequested = NO;
+    self._pictureInPicture = NO;
+    [self _cancelPipRestoreTimer];
+    if (self.isObservingReadyForDisplay && self._playerLayer) {
+        [self._playerLayer removeObserver:self forKeyPath:@"readyForDisplay" context:readyForDisplayContext];
+        self.isObservingReadyForDisplay = NO;
+    }
     if (_player.currentItem == nil) {
         return;
     }
@@ -381,6 +392,24 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                     self.pipController.canStartPictureInPictureAutomaticallyFromInline = YES;
                 }
             }
+            // If the app went to background before readyForDisplay fired (first-swipe
+            // scenario), the system missed the auto-PiP window. Start PiP manually now.
+            // Use retries instead of a single attempt — isPictureInPicturePossible can be
+            // briefly NO while the home-swipe animation is still in progress.
+            if (@available(iOS 9.0, *)) {
+                if (self.pipController &&
+                    !self.pipController.isPictureInPictureActive &&
+                    _isPlaying &&
+                    [UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
+                    // Mark as requested so _startPipWithRetries guard doesn't bail out
+                    // on the cold-start path (where enablePictureInPicture was never called
+                    // from Dart and neither _pipStartRequested nor _pictureInPicture is set).
+                    self._pipStartRequested = YES;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self _startPipWithRetries:10 interval:0.3];
+                    });
+                }
+            }
             if (self._pipStartRequested) {
                 dispatch_async(dispatch_get_main_queue(), ^{ [self setPictureInPicture:YES]; });
             }
@@ -534,6 +563,23 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     _stalledCount = 0;
     _isStalledCheckStarted = false;
     _isPlaying = true;
+    if (self.needsSeekAfterPipStop) {
+        // After PiP closes, the Flutter texture needs a fresh frame to unfreeze.
+        // Seek to the current position (zero tolerance) so the decoder emits a new
+        // frame once the texture is ready, then resume normally.
+        self.needsSeekAfterPipStop = NO;
+        CMTime currentTime = _player.currentTime;
+        __weak typeof(self) weakSelf = self;
+        [_player seekToTime:currentTime
+           toleranceBefore:kCMTimeZero
+            toleranceAfter:kCMTimeZero
+          completionHandler:^(BOOL finished) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf updatePlayingState];
+            });
+        }];
+        return;
+    }
     [self updatePlayingState];
 }
 
@@ -631,11 +677,9 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         if (self.pipController) {
             if (self._pictureInPicture && !self.pipController.isPictureInPictureActive) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (self.pipController.isPictureInPicturePossible) {
-                        [self.pipController startPictureInPicture];
-                    } else {
-                        NSLog(@"PiP start requested, but isPictureInPicturePossible is NO.");
-                    }
+                    // Retry up to 10 times (×300 ms = 3 s) in case isPictureInPicturePossible
+                    // is briefly NO on the first PiP request (e.g. during home-swipe animation).
+                    [self _startPipWithRetries:10 interval:0.3];
                 });
             } else if (!self._pictureInPicture && self.pipController.isPictureInPictureActive) {
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -643,6 +687,22 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                 });
             }
         }
+    }
+}
+
+- (void)_startPipWithRetries:(int)retries interval:(NSTimeInterval)interval API_AVAILABLE(ios(9.0)) {
+    if (!self._pipStartRequested && !self._pictureInPicture) return;
+    if (self.pipController.isPictureInPictureActive) return; // already active — prevent double-start
+    if (self.pipController.isPictureInPicturePossible) {
+        [self.pipController startPictureInPicture];
+    } else if (retries > 0) {
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                [self _startPipWithRetries:retries - 1 interval:interval];
+            });
+    } else {
+        NSLog(@"PiP start failed: isPictureInPicturePossible remained NO after retries.");
     }
 }
 
@@ -657,15 +717,22 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)setupPipController {
     if (@available(iOS 9.0, *)) {
-        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
-        [[AVAudioSession sharedInstance] setActive: YES error: nil];
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
+                                               mode:AVAudioSessionModeMoviePlayback
+                                            options:0
+                                              error:nil];
+        [[AVAudioSession sharedInstance] setActive:YES error:nil];
         [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
         if (self._playerLayer && [AVPictureInPictureController isPictureInPictureSupported]) {
             if (!self.pipController) {
                 self.pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:self._playerLayer];
                 self.pipController.delegate = self;
+                // Set immediately so the OS can auto-start PiP during the very first
+                // home-swipe animation, before readyForDisplay has a chance to fire.
+                if (@available(iOS 14.2, *)) {
+                    self.pipController.canStartPictureInPictureAutomaticallyFromInline = YES;
+                }
             }
-            if (@available(iOS 14.2, *)) self.pipController.canStartPictureInPictureAutomaticallyFromInline = YES;
         }
     }
 }
@@ -695,12 +762,21 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     }
 
     if (self._pipStartRequested) {
-        dispatch_async(dispatch_get_main_queue(), ^{ [self setPictureInPicture:true]; });
+        // Check readyForDisplay immediately — KVO with NSKeyValueObservingOptionNew does not fire
+        // for the current value at subscription time. If readyForDisplay is already YES (video
+        // is already playing), the observer will never fire and PiP would never start.
+        if (self._playerLayer.readyForDisplay) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self setPictureInPicture:YES]; });
+        }
+        // If readyForDisplay is NO, the KVO observer will trigger setPictureInPicture when it becomes YES.
     }
 }
 
 - (void)disablePictureInPicture {
     self._pipStartRequested = NO;
+    // Capture the active state BEFORE setPictureInPicture:NO resets the flag,
+    // otherwise the pipStop check below would always be false.
+    BOOL wasActive = self._pictureInPicture;
     [self setPictureInPicture:NO];
 
     if (self._playerLayer && self.isObservingReadyForDisplay) {
@@ -708,7 +784,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         self.isObservingReadyForDisplay = NO;
     }
 
-    if (self._pictureInPicture && _eventSink) {
+    if (wasActive && _eventSink) {
         _eventSink(@{@"event" : @"pipStop"});
     }
 }
@@ -716,6 +792,11 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 #if TARGET_OS_IOS
 - (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
+    // Mark that the next play() call must seek to the current position before
+    // resuming. The seek must happen when the Flutter texture is ready (i.e. at
+    // play() time, after the app returns to foreground), not here while the PiP
+    // surface is still being torn down.
+    self.needsSeekAfterPipStop = _isPlaying;
     [self disablePictureInPicture];
 }
 
@@ -730,15 +811,74 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)pictureInPictureControllerWillStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
-
+    // Ensure the audio session is active before the PiP transition begins.
+    // This guards against the session being deactivated between setupPipController
+    // and the actual PiP start (e.g. on cold-start / first video load).
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
 }
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController failedToStartPictureInPictureWithError:(NSError *)error {
     NSLog(@"PiP failed: %@", error);
 }
-- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController
+    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
     self.restorePIPCompletionHandler = completionHandler;
-    [self invokeRestorePIPCompletionHandler:true];
+
+    // Cancel any leftover state from a previous (incomplete) restore cycle.
+    [self _cancelPipRestoreTimer];
+
+    __weak typeof(self) weakSelf = self;
+
+    // Case A — user tapped the expand button: the system brings the app to foreground
+    // first, which fires UIApplicationWillEnterForegroundNotification. Signal the
+    // system that the UI is restored as soon as that happens.
+    self._pipForegroundObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationWillEnterForegroundNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                    [weakSelf _cancelPipRestoreTimer];
+                    [weakSelf invokeRestorePIPCompletionHandler:YES];
+                }];
+
+    // Case B — user tapped "×": the app stays in background and the foreground
+    // notification never fires. After 0.5 s we treat this as a user-initiated close,
+    // stop the player to prevent phantom audio, and complete the restore handshake.
+    self._pipRestoreTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                             target:self
+                                                           selector:@selector(_handlePipClosedByUser)
+                                                           userInfo:nil
+                                                            repeats:NO];
+}
+
+/// Called when the 0.5 s timer fires, meaning the app did NOT come to foreground
+/// after PiP stopped — i.e. the user dismissed PiP via the "×" button.
+- (void)_handlePipClosedByUser {
+    self._pipRestoreTimer = nil;
+    [self _cancelPipRestoreTimer];
+
+    // Pause playback to prevent audio continuing invisibly in the background.
+    _isPlaying = NO;
+    [_player pause];
+    if (_eventSink) {
+        _eventSink(@{@"event" : @"pause"});
+    }
+
+    // Confirm the restore so the system can cleanly finish the PiP teardown.
+    [self invokeRestorePIPCompletionHandler:YES];
+}
+
+/// Cancels the pending X-close timer and removes the foreground observer.
+- (void)_cancelPipRestoreTimer {
+    if (self._pipRestoreTimer) {
+        [self._pipRestoreTimer invalidate];
+        self._pipRestoreTimer = nil;
+    }
+    if (self._pipForegroundObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self._pipForegroundObserver];
+        self._pipForegroundObserver = nil;
+    }
 }
 
 - (void) setAudioTrack:(NSString*) name index:(int) index{
@@ -804,10 +944,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)dispose {
     [self pause];
-    [self disposeSansEventChannel];
-    [_eventChannel setStreamHandler:nil];
-    [self disablePictureInPicture];
-    [self setPictureInPicture:false];
+    [self _cancelPipRestoreTimer];     // cancel any pending X-close timer / foreground observer
+    [self disablePictureInPicture];    // remove KVO + send pipStop while eventSink is alive
+    [_eventChannel setStreamHandler:nil]; // nil out sink only after pipStop is sent
+    [self disposeSansEventChannel];    // clear() resets _disposed to false — must be before next line
     _disposed = true;
 }
 

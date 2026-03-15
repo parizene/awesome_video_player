@@ -538,6 +538,27 @@ internal class BetterPlayer(
         exoPlayer?.seekTo(location.toLong())
     }
 
+    fun seekRelative(offsetMs: Long) {
+        val newPos = ((exoPlayer?.currentPosition ?: 0L) + offsetMs).coerceAtLeast(0L)
+        exoPlayer?.seekTo(newPos)
+    }
+
+    val isPlaying: Boolean
+        get() = exoPlayer?.isPlaying ?: false
+
+    /** Returns actual video (width, height) after accounting for rotation, or null if unavailable. */
+    val videoDimensions: Pair<Int, Int>?
+        get() {
+            val format = exoPlayer?.videoFormat ?: return null
+            var w = format.width
+            var h = format.height
+            if (format.rotationDegrees == 90 || format.rotationDegrees == 270) {
+                w = format.height
+                h = format.width
+            }
+            return if (w > 0 && h > 0) Pair(w, h) else null
+        }
+
     val position: Long
         get() = exoPlayer?.currentPosition ?: 0L
 
