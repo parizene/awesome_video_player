@@ -49,6 +49,9 @@ class BetterPlayerController {
   BetterPlayerControlsConfiguration get betterPlayerControlsConfiguration =>
       _betterPlayerControlsConfiguration;
 
+  ///Returns the native UIView pointer (iOS only) for PiP integration.
+  Future<int?> getNativeViewId() async => videoPlayerController?.getNativeViewId();
+
   ///Expose all active eventListeners
   List<Function(BetterPlayerEvent)?> get eventListeners =>
       _eventListeners.sublist(1);

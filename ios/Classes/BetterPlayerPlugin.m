@@ -426,6 +426,8 @@ bool _remoteCommandsInitialized = false;
             NSString* name = argsMap[@"name"];
             int index = [argsMap[@"index"] intValue];
             [player setAudioTrack:name index: index];
+        } else if ([@"getNativeViewId" isEqualToString:call.method]){
+            result(@([player getNativeViewPointer]));
         } else if ([@"setMixWithOthers" isEqualToString:call.method]){
             [player setMixWithOthers:[argsMap[@"mixWithOthers"] boolValue]];
         } else if ([@"preCache" isEqualToString:call.method]){

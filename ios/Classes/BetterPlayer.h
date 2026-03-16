@@ -28,6 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSString* key;
 @property(nonatomic, readonly) int failedCount;
 @property(nonatomic) AVPlayerLayer* _playerLayer;
+@property(nonatomic, strong) BetterPlayerView* playerView;
 @property(nonatomic) bool _pictureInPicture;
 @property(nonatomic) bool _observersAdded;
 @property(nonatomic) int stalledCount;
@@ -65,6 +66,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (int64_t)absolutePosition;
 - (int64_t) FLTCMTimeToMillis:(CMTime) time;
 
+- (int64_t)getNativeViewPointer;
 - (void)clear;
 - (void)disposeSansEventChannel;
 - (void)dispose;

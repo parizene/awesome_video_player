@@ -192,10 +192,11 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   bool get _created => _creatingCompleter.isCompleted;
   Duration? _seekPosition;
 
-  /// This is just exposed for testing. It shouldn't be used by anyone depending
-  /// on the plugin.
-  @visibleForTesting
+  /// Returns the native texture id of the underlying video player.
   int? get textureId => _textureId;
+
+  /// Returns the native UIView pointer (iOS only) for PiP integration.
+  Future<int?> getNativeViewId() => _videoPlayerPlatform.getNativeViewId(_textureId);
 
   /// Attempts to open the given [dataSource] and load metadata about the video.
   Future<void> _create() async {

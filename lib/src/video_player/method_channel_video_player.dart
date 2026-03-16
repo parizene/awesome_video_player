@@ -376,6 +376,14 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
+  Future<int?> getNativeViewId(int? textureId) {
+    return _channel.invokeMethod<int>(
+      'getNativeViewId',
+      <String, dynamic>{'textureId': textureId},
+    );
+  }
+
+  @override
   Widget buildView(int? textureId) {
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       return UiKitView(

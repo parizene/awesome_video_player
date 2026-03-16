@@ -45,9 +45,15 @@ AVPictureInPictureController *_pipController;
 }
 
 - (nonnull UIView *)view {
-    BetterPlayerView *playerView = [[BetterPlayerView alloc] initWithFrame:CGRectZero];
-    playerView.player = _player;
-    return playerView;
+    if (!_playerView) {
+        _playerView = [[BetterPlayerView alloc] initWithFrame:CGRectZero];
+        _playerView.player = _player;
+    }
+    return _playerView;
+}
+
+- (int64_t)getNativeViewPointer {
+    return _playerView ? (int64_t)(__bridge void*)_playerView : 0;
 }
 
 - (void)addObservers:(AVPlayerItem*)item {
