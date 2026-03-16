@@ -80,9 +80,13 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     override fun onDetachedFromActivityForConfigChanges() {}
 
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {}
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
 
-    override fun onDetachedFromActivity() {}
+    override fun onDetachedFromActivity() {
+        activity = null
+    }
 
     private fun disposeAllPlayers() {
         for (i in 0 until videoPlayers.size()) {
@@ -174,6 +178,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
             PLAY_METHOD -> {
                 setupNotification(player)
                 player.play()
+                updateKeepScreenOnFlag()
                 result.success(null)
             }
 
@@ -470,7 +475,20 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         player.dispose()
         videoPlayers.remove(textureId)
         dataSources.remove(textureId)
+        updateKeepScreenOnFlag()
         stopPipHandler()
+    }
+
+    private fun updateKeepScreenOnFlag() {
+        val hasKeepScreenOnPlayer = (0 until dataSources.size()).any { i ->
+            val ds = dataSources[dataSources.keyAt(i)]
+            !getParameter(ds, ALLOWED_SCREEN_SLEEP_PARAMETER, true)
+        }
+        if (hasKeepScreenOnPlayer) {
+            activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     private fun stopPipHandler() {
@@ -540,6 +558,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val DRM_HEADERS_PARAMETER = "drmHeaders"
         private const val DRM_CLEARKEY_PARAMETER = "clearKey"
         private const val MIX_WITH_OTHERS_PARAMETER = "mixWithOthers"
+        private const val ALLOWED_SCREEN_SLEEP_PARAMETER = "allowedScreenSleep"
         const val URL_PARAMETER = "url"
         const val PRE_CACHE_SIZE_PARAMETER = "preCacheSize"
         const val MAX_CACHE_SIZE_PARAMETER = "maxCacheSize"
