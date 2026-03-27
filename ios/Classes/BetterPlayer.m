@@ -124,7 +124,11 @@ AVPictureInPictureController *_pipController;
 - (void)itemDidPlayToEndTime:(NSNotification*)notification {
     if (_isLooping) {
         AVPlayerItem* p = [notification object];
-        [p seekToTime:kCMTimeZero completionHandler:nil];
+        [p seekToTime:kCMTimeZero completionHandler:^(BOOL finished) {
+            if (finished) {
+                [self play];
+            }
+        }];
     } else {
         if (_eventSink) {
             _eventSink(@{@"event" : @"completed", @"key" : _key});
@@ -488,8 +492,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
     if (_isPlaying) {
         if (@available(iOS 10.0, *)) {
-            [_player playImmediatelyAtRate:1.0];
-            _player.rate = _playerRate;
+            [_player playImmediatelyAtRate:_playerRate];
         } else {
             [_player play];
             _player.rate = _playerRate;
@@ -616,7 +619,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
          toleranceAfter:kCMTimeZero
       completionHandler:^(BOOL finished){
         if (wasPlaying){
-            _player.rate = _playerRate;
+            [self play];
         }
     }];
 }
@@ -630,30 +633,21 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)setSpeed:(double)speed result:(FlutterResult)result {
-    if (speed == 1.0 || speed == 0.0) {
-        _playerRate = 1;
-        result(nil);
-    } else if (speed < 0 || speed > 2.0) {
+    if (speed < 0 || speed > 2.0) {
         result([FlutterError errorWithCode:@"unsupported_speed"
                                    message:@"Speed must be >= 0.0 and <= 2.0"
                                    details:nil]);
-    } else if ((speed > 1.0 && _player.currentItem.canPlayFastForward) ||
-               (speed < 1.0 && _player.currentItem.canPlaySlowForward)) {
-        _playerRate = speed;
-        result(nil);
-    } else {
-        if (speed <= 1.0) {
-            result([FlutterError errorWithCode:@"unsupported_slow_forward"
-                                       message:@"This video cannot be played slow forward"
-                                       details:nil]);
-        }
+        return;
     }
+
+    _playerRate = (speed == 0.0) ? 1.0 : speed;
+    result(nil);
 
     if (_isPlaying){
         if (@available(iOS 16, *)) {
-            _player.defaultRate = speed;
+            _player.defaultRate = _playerRate;
         }
-        _player.rate = speed;
+        _player.rate = _playerRate;
     }
 }
 

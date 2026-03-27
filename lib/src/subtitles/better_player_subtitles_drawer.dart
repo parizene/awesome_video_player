@@ -148,26 +148,37 @@ class _BetterPlayerSubtitlesDrawerState
   }
 
   Widget _getTextWithStroke(String subtitleText) {
+    final textAlign = _alignmentToTextAlign(_configuration!.alignment);
     return Container(
       color: _configuration!.backgroundColor,
       padding: _configuration!.innerPadding,
       child: Stack(
         children: [
           if (_configuration!.outlineEnabled)
-            _buildHtmlWidget(subtitleText, _outerTextStyle)
+            _buildHtmlWidget(subtitleText, _outerTextStyle, textAlign)
           else
             const SizedBox(),
-          _buildHtmlWidget(subtitleText, _innerTextStyle)
+          _buildHtmlWidget(subtitleText, _innerTextStyle, textAlign)
         ],
       ),
     );
   }
 
-  Widget _buildHtmlWidget(String text, TextStyle textStyle) {
-    return HtmlWidget(
-      text,
-      textStyle: textStyle,
+  Widget _buildHtmlWidget(String text, TextStyle textStyle, TextAlign textAlign) {
+    return DefaultTextStyle(
+      style: textStyle,
+      textAlign: textAlign,
+      child: HtmlWidget(
+        text,
+        textStyle: textStyle,
+      ),
     );
+  }
+
+  TextAlign _alignmentToTextAlign(Alignment alignment) {
+    if (alignment.x < 0) return TextAlign.left;
+    if (alignment.x > 0) return TextAlign.right;
+    return TextAlign.center;
   }
 
   BetterPlayerSubtitlesConfiguration setupDefaultConfiguration() {
