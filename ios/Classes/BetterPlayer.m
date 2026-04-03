@@ -87,8 +87,15 @@ AVPictureInPictureController *_pipController;
     }
 
     [self removeObservers];
+
+    // Cancel delayed buffer checks on pause
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startStalledCheck) object:nil];
+
     AVAsset* asset = [_player.currentItem asset];
     [asset cancelLoading];
+
+    [_player replaceCurrentItemWithPlayerItem:nil];
+
     self.isNaturalSizeLoaded = false;
     self.isPreferredTransformLoaded = false;
     self.isDurationLoaded = false;
@@ -124,9 +131,12 @@ AVPictureInPictureController *_pipController;
 - (void)itemDidPlayToEndTime:(NSNotification*)notification {
     if (_isLooping) {
         AVPlayerItem* p = [notification object];
+        __weak typeof(self) weakSelf = self;
         [p seekToTime:kCMTimeZero completionHandler:^(BOOL finished) {
-            if (finished) {
-                [self play];
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (finished && strongSelf->_isPlaying) { 
+                [strongSelf play];
             }
         }];
     } else {
@@ -349,6 +359,18 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 -(void)startStalledCheck{
+    // Do not resume if user already swiped to another video
+    if (!_isPlaying) {
+        _isStalledCheckStarted = false;
+        return;
+    }
+
+    // Prevent audio starting if app was sent to background during stall
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+        _isStalledCheckStarted = false;
+        return;
+    }
+
     if (_player.currentItem.playbackLikelyToKeepUp ||
         [self availableDuration] - CMTimeGetSeconds(_player.currentItem.currentTime) > 10.0) {
         [self play];
@@ -580,6 +602,12 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)pause {
     _isPlaying = false;
+
+    // Cancel delayed buffer checks on pause
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startStalledCheck) object:nil];
+
+    _isStalledCheckStarted = false;
+
     [self updatePlayingState];
 }
 
@@ -608,18 +636,25 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)seekTo:(int)location {
-    ///When player is playing, pause video, seek to new position and start again. This will prevent issues with seekbar jumps.
+    // When player is playing, pause video, seek to new position and start again. 
+    // This will prevent issues with seekbar jumps.
     bool wasPlaying = _isPlaying;
     if (wasPlaying){
         [_player pause];
     }
 
+    __weak typeof(self) weakSelf = self;
+
     [_player seekToTime:CMTimeMake(location, 1000)
         toleranceBefore:kCMTimeZero
          toleranceAfter:kCMTimeZero
       completionHandler:^(BOOL finished){
-        if (wasPlaying){
-            [self play];
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        // Ensure that user not paused/swiped video while seek was in progress
+        if (wasPlaying && strongSelf->_isPlaying){
+            [strongSelf play];
         }
     }];
 }
