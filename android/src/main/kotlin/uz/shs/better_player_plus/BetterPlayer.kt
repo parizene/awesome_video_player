@@ -100,6 +100,9 @@ internal class BetterPlayer(
         customDefaultLoadControl ?: CustomDefaultLoadControl()
     private var lastSendBufferedPosition = 0L
 
+    var pipPlayStateListener: ((Boolean) -> Unit)? = null
+    var pipEndReachedListener: (() -> Unit)? = null
+
     init {
         val loadBuilder = DefaultLoadControl.Builder()
         loadBuilder.setBufferDurationsMs(
@@ -117,6 +120,125 @@ internal class BetterPlayer(
         workerObserverMap = HashMap()
         setupVideoPlayer(eventChannel, textureEntry, result)
     }
+
+    fun setPlaylistItems(
+        context: Context,
+        items: List<Map<String, Any?>>,
+        startIndex: Int,
+    ) {
+        val player = exoPlayer ?: return
+        if (items.isEmpty()) return
+        isInitialized = false
+        val safeIndex = startIndex.coerceIn(0, items.size - 1)
+
+        val sources = items.mapNotNull { entry -> buildMediaSourceForEntry(context, entry) }
+        if (sources.isEmpty()) return
+
+        player.setMediaSources(sources, safeIndex, 0L)
+        player.prepare()
+    }
+
+    private fun buildMediaSourceForEntry(
+        context: Context,
+        entry: Map<String, Any?>,
+    ): MediaSource? {
+        val uriStr = entry["uri"] as? String ?: return null
+        val uri = Uri.parse(uriStr)
+        @Suppress("UNCHECKED_CAST")
+        val headers: Map<String, String> =
+            (entry["headers"] as? Map<String, String>) ?: emptyMap()
+        val cacheKey = entry["cacheKey"] as? String
+        val formatHint = entry["formatHint"] as? String
+        val licenseUrl = entry["licenseUrl"] as? String
+        val clearKey = entry["clearKey"] as? String
+        @Suppress("UNCHECKED_CAST")
+        val drmHeaders: Map<String, String> =
+            (entry["drmHeaders"] as? Map<String, String>) ?: emptyMap()
+
+        var perItemDrm: DrmSessionManager? = null
+        if (!licenseUrl.isNullOrEmpty()) {
+            val callback = HttpMediaDrmCallback(licenseUrl, DefaultHttpDataSource.Factory())
+            for ((k, v) in drmHeaders) callback.setKeyRequestProperty(k, v)
+            val widevineUuid = Util.getDrmUuid("widevine")
+            if (widevineUuid != null) {
+                perItemDrm = DefaultDrmSessionManager.Builder()
+                    .setUuidAndExoMediaDrmProvider(widevineUuid) { uuid ->
+                        try {
+                            FrameworkMediaDrm.newInstance(uuid!!).apply {
+                                setPropertyString("securityLevel", "L3")
+                            }
+                        } catch (_: UnsupportedDrmException) {
+                            DummyExoMediaDrm()
+                        }
+                    }
+                    .setMultiSession(false)
+                    .build(callback)
+            }
+        } else if (!clearKey.isNullOrEmpty()) {
+            perItemDrm = DefaultDrmSessionManager.Builder()
+                .setUuidAndExoMediaDrmProvider(C.CLEARKEY_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
+                .build(LocalMediaDrmCallback(clearKey.toByteArray()))
+        }
+
+        val factory: DataSource.Factory = if (isHTTP(uri)) {
+            getDataSourceFactory(getUserAgent(headers), headers)
+        } else {
+            DefaultDataSource.Factory(context)
+        }
+
+        // buildMediaSource reads the player-wide drmSessionManager field; swap transiently.
+        val savedDrm = drmSessionManager
+        drmSessionManager = perItemDrm ?: savedDrm
+        return try {
+            buildMediaSource(uri, factory, formatHint, cacheKey, context)
+        } finally {
+            drmSessionManager = savedDrm
+        }
+    }
+
+    // In PiP, +10s past end clamps and signals dismiss instead of advancing.
+    fun nativeSkip(deltaMs: Long) {
+        val player = exoPlayer ?: return
+        val target = player.currentPosition + deltaMs
+        val duration = player.duration
+        when {
+            target < 0L -> player.seekTo(0L)
+            duration > 0 && target >= duration && deltaMs > 0 -> {
+                player.seekTo(duration)
+                pipEndReachedListener?.invoke()
+            }
+            else -> player.seekTo(target)
+        }
+    }
+
+    // playWhenReady intent, not the actual renderer state.
+    val isPlaying: Boolean
+        get() = exoPlayer?.playWhenReady == true && exoPlayer?.playbackState != Player.STATE_ENDED
+
+    // Actual renderer state — drives PiP icon; goes false during STATE_BUFFERING.
+    val isActuallyPlaying: Boolean
+        get() = exoPlayer?.isPlaying == true
+
+    fun togglePlayPause() {
+        val p = exoPlayer ?: return
+        // STATE_ENDED ignores playWhenReady=true; seek first.
+        if (p.playbackState == Player.STATE_ENDED) {
+            p.seekTo(0L)
+            p.playWhenReady = true
+            return
+        }
+        p.playWhenReady = !p.playWhenReady
+    }
+
+    val videoSize: Pair<Int, Int>?
+        get() {
+            val format = exoPlayer?.videoFormat ?: return null
+            val w = format.width
+            val h = format.height
+            if (w <= 0 || h <= 0) return null
+            val rot = format.rotationDegrees
+            return if (rot == 90 || rot == 270) Pair(h, w) else Pair(w, h)
+        }
 
     fun setDataSource(
         context: Context,
@@ -458,6 +580,10 @@ internal class BetterPlayer(
                         event["event"] = "completed"
                         event["key"] = key
                         eventSink.success(event)
+                        // No next item → ask the plugin to leave PiP.
+                        if (exoPlayer?.hasNextMediaItem() != true) {
+                            pipEndReachedListener?.invoke()
+                        }
                     }
 
                     Player.STATE_IDLE -> {
@@ -468,6 +594,37 @@ internal class BetterPlayer(
 
             override fun onPlayerError(error: PlaybackException) {
                 eventSink.error("VideoError", "Video player had error $error", "")
+            }
+
+            override fun onMediaItemTransition(
+                mediaItem: MediaItem?,
+                reason: Int
+            ) {
+                val index = exoPlayer?.currentMediaItemIndex ?: 0
+                val event: MutableMap<String, Any?> = HashMap()
+                event["event"] = "playlistIndexChanged"
+                event["index"] = index
+                eventSink.success(event)
+                pipPlayStateListener?.invoke(isPlaying)
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // Use playWhenReady (user intent) not isPlaying (actual rendering).
+                // isPlaying flips on every buffer stall or audio-focus change, which
+                // would round-trip to Dart and toggle playWhenReady=false, breaking
+                // resume after the stall. Only emit events while in PiP — Dart UI
+                // handles its own state outside PiP.
+                val listener = pipPlayStateListener ?: return
+                listener(playWhenReady)
+                val event: MutableMap<String, Any?> = HashMap()
+                event["event"] = if (playWhenReady) "play" else "pause"
+                eventSink.success(event)
+            }
+
+            override fun onIsPlayingChanged(playing: Boolean) {
+                // Drive the PiP icon state — this reflects actual rendering and
+                // is what the system uses for PiP UI. Don't emit Dart events here.
+                pipPlayStateListener?.invoke(playing)
             }
         })
         val reply: MutableMap<String, Any> = HashMap()

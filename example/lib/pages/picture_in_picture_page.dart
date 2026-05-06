@@ -18,12 +18,22 @@ class _PictureInPicturePageState extends State<PictureInPicturePage> {
       aspectRatio: 16 / 9,
       fit: BoxFit.contain,
     );
-    BetterPlayerDataSource dataSource = BetterPlayerDataSource(
-      BetterPlayerDataSourceType.network,
-      Constants.elephantDreamVideoUrl,
-    );
+    final sources = [
+      BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        Constants.elephantDreamVideoUrl,
+      ),
+      BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        Constants.bugBuckBunnyVideoUrl,
+      ),
+      BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        Constants.forBiggerBlazesUrl,
+      ),
+    ];
     _betterPlayerController = BetterPlayerController(betterPlayerConfiguration);
-    _betterPlayerController.setupDataSource(dataSource);
+    _betterPlayerController.setupPlaylist(sources);
     _betterPlayerController.setBetterPlayerGlobalKey(_betterPlayerKey);
     super.initState();
   }

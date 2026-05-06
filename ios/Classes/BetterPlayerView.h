@@ -10,4 +10,7 @@
 @interface BetterPlayerView : UIView
 @property AVPlayer *player;
 @property (readonly) AVPlayerLayer *playerLayer;
+/// Fires from -layoutSubviews; lets owner build AVPictureInPictureController
+/// only after the layer has non-zero bounds (iOS 14+ auto-PiP requirement).
+@property (nonatomic, copy) void (^onLayout)(void);
 @end

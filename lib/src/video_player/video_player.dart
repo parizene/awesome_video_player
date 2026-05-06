@@ -252,6 +252,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         case VideoEventType.pipStop:
           value = value.copyWith(isPip: false);
           break;
+        case VideoEventType.playlistIndexChanged:
+          break;
         case VideoEventType.unknown:
           break;
       }
@@ -585,6 +587,16 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   Future<void> setTrackParameters(int? width, int? height, int? bitrate) async {
     await _videoPlayerPlatform.setTrackParameters(
         _textureId, width, height, bitrate);
+  }
+
+  Future<void> setPlaylist(List<Map<String, dynamic>> items,
+      {int startIndex = 0}) async {
+    await _videoPlayerPlatform.setPlaylist(_textureId, items,
+        startIndex: startIndex);
+  }
+
+  Future<void> setAutoPictureInPictureMode(bool enabled) async {
+    await _videoPlayerPlatform.setAutoPictureInPictureMode(_textureId, enabled);
   }
 
   Future<void> enablePictureInPicture(

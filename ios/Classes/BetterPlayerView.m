@@ -22,4 +22,11 @@
 - (AVPlayerLayer *)playerLayer {
     return (AVPlayerLayer *)self.layer;
 }
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (self.onLayout) {
+        self.onLayout();
+    }
+}
 @end

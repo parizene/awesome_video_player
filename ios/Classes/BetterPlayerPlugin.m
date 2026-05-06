@@ -10,13 +10,20 @@
 #endif
 
 
-@implementation BetterPlayerPlugin
+@implementation BetterPlayerPlugin {
+    BetterPlayer* _notificationPlayer;
+    // Stored per-instance so hot-restart only removes our own MPRemoteCommand targets.
+    id _skipForwardHandle;
+    id _skipBackwardHandle;
+    id _playHandle;
+    id _pauseHandle;
+    id _changePlaybackPositionHandle;
+}
 NSMutableDictionary* _dataSourceDict;
 NSMutableDictionary*  _timeObserverIdDict;
 NSMutableDictionary*  _artworkImageDict;
 CacheManager* _cacheManager;
 int texturesCount = -1;
-BetterPlayer* _notificationPlayer;
 bool _remoteCommandsInitialized = false;
 
 
@@ -51,6 +58,18 @@ bool _remoteCommandsInitialized = false;
         [player disposeSansEventChannel];
     }
     [_players removeAllObjects];
+    MPRemoteCommandCenter* commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    if (_skipForwardHandle != nil) { [commandCenter.skipForwardCommand removeTarget:_skipForwardHandle]; _skipForwardHandle = nil; }
+    if (_skipBackwardHandle != nil) { [commandCenter.skipBackwardCommand removeTarget:_skipBackwardHandle]; _skipBackwardHandle = nil; }
+    if (_playHandle != nil) { [commandCenter.playCommand removeTarget:_playHandle]; _playHandle = nil; }
+    if (_pauseHandle != nil) { [commandCenter.pauseCommand removeTarget:_pauseHandle]; _pauseHandle = nil; }
+    if (@available(iOS 9.1, *)) {
+        if (_changePlaybackPositionHandle != nil) {
+            [commandCenter.changePlaybackPositionCommand removeTarget:_changePlaybackPositionHandle];
+            _changePlaybackPositionHandle = nil;
+        }
+    }
+    _notificationPlayer = nil;
 }
 
 #pragma mark - FlutterPlatformViewFactory protocol
@@ -121,49 +140,90 @@ bool _remoteCommandsInitialized = false;
 
 
 - (void) setupRemoteCommands:(BetterPlayer*)player  {
-    if (_remoteCommandsInitialized){
-        return;
-    }
     MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
-    [commandCenter.togglePlayPauseCommand setEnabled:YES];
+
+    if (_skipForwardHandle != nil) {
+        [commandCenter.skipForwardCommand removeTarget:_skipForwardHandle];
+        _skipForwardHandle = nil;
+    }
+    if (_skipBackwardHandle != nil) {
+        [commandCenter.skipBackwardCommand removeTarget:_skipBackwardHandle];
+        _skipBackwardHandle = nil;
+    }
+    if (_playHandle != nil) {
+        [commandCenter.playCommand removeTarget:_playHandle];
+        _playHandle = nil;
+    }
+    if (_pauseHandle != nil) {
+        [commandCenter.pauseCommand removeTarget:_pauseHandle];
+        _pauseHandle = nil;
+    }
+    if (@available(iOS 9.1, *)) {
+        if (_changePlaybackPositionHandle != nil) {
+            [commandCenter.changePlaybackPositionCommand removeTarget:_changePlaybackPositionHandle];
+            _changePlaybackPositionHandle = nil;
+        }
+    }
+
+    // togglePlayPauseCommand intentionally disabled — disambiguous play/pause
+    // commands are sufficient and avoid races with our state transitions.
+    [commandCenter.togglePlayPauseCommand setEnabled:NO];
     [commandCenter.playCommand setEnabled:YES];
     [commandCenter.pauseCommand setEnabled:YES];
     [commandCenter.nextTrackCommand setEnabled:NO];
     [commandCenter.previousTrackCommand setEnabled:NO];
+    [commandCenter.seekForwardCommand setEnabled:NO];
+    [commandCenter.seekBackwardCommand setEnabled:NO];
+    [commandCenter.skipForwardCommand setEnabled:YES];
+    [commandCenter.skipBackwardCommand setEnabled:YES];
+    commandCenter.skipForwardCommand.preferredIntervals = @[@10];
+    commandCenter.skipBackwardCommand.preferredIntervals = @[@10];
+
+    _skipForwardHandle = [commandCenter.skipForwardCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        if (_notificationPlayer != nil && _notificationPlayer != (id)[NSNull null]) {
+            [_notificationPlayer nativeSkip:10];
+        }
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
+    _skipBackwardHandle = [commandCenter.skipBackwardCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        if (_notificationPlayer != nil && _notificationPlayer != (id)[NSNull null]) {
+            [_notificationPlayer nativeSkip:-10];
+        }
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
     if (@available(iOS 9.1, *)) {
         [commandCenter.changePlaybackPositionCommand setEnabled:YES];
     }
 
-    [commandCenter.togglePlayPauseCommand addTargetWithHandler: ^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        if (_notificationPlayer != [NSNull null]){
-            if (_notificationPlayer.isPlaying){
-                _notificationPlayer.eventSink(@{@"event" : @"play"});
-            } else {
-                _notificationPlayer.eventSink(@{@"event" : @"pause"});
-            }
+    // For Lock Screen / Control Center play/pause buttons. AVKit drives the
+    // PiP center button directly via [_player play/pause] (does NOT dispatch
+    // these commands), so the isPipActive branch below is a redundant safety
+    // path and not the primary route.
+    _playHandle = [commandCenter.playCommand addTargetWithHandler: ^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        BetterPlayer* p = _notificationPlayer;
+        if (p == nil || p == (id)[NSNull null]) return MPRemoteCommandHandlerStatusNoSuchContent;
+        if ([p isPipActive]) {
+            [p play];
+        } else if (p.eventSink != nil) {
+            p.eventSink(@{@"event": @"play"});
         }
         return MPRemoteCommandHandlerStatusSuccess;
     }];
 
-    [commandCenter.playCommand addTargetWithHandler: ^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        if (_notificationPlayer != [NSNull null]){
-            _notificationPlayer.eventSink(@{@"event" : @"play"});
+    _pauseHandle = [commandCenter.pauseCommand addTargetWithHandler: ^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        BetterPlayer* p = _notificationPlayer;
+        if (p == nil || p == (id)[NSNull null]) return MPRemoteCommandHandlerStatusNoSuchContent;
+        if ([p isPipActive]) {
+            [p pause];
+        } else if (p.eventSink != nil) {
+            p.eventSink(@{@"event": @"pause"});
         }
         return MPRemoteCommandHandlerStatusSuccess;
     }];
-
-    [commandCenter.pauseCommand addTargetWithHandler: ^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        if (_notificationPlayer != [NSNull null]){
-            _notificationPlayer.eventSink(@{@"event" : @"pause"});
-        }
-        return MPRemoteCommandHandlerStatusSuccess;
-    }];
-
-
 
     if (@available(iOS 9.1, *)) {
-        [commandCenter.changePlaybackPositionCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-            if (_notificationPlayer != [NSNull null]){
+        _changePlaybackPositionHandle = [commandCenter.changePlaybackPositionCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+            if (_notificationPlayer != nil && _notificationPlayer != (id)[NSNull null] && _notificationPlayer.eventSink != nil){
                 MPChangePlaybackPositionCommandEvent * playbackEvent = (MPChangePlaybackRateCommandEvent * ) event;
                 CMTime time = CMTimeMake(playbackEvent.positionTime, 1);
                 int64_t millis = [BetterPlayerTimeUtils FLTCMTimeToMillis:(time)];
@@ -404,11 +464,43 @@ bool _remoteCommandsInitialized = false;
 
             [player setTrackParameters:width: height : bitrate];
             result(nil);
+        } else if ([@"setPlaylist" isEqualToString:call.method]){
+            // Accepts list of dicts or list of bare URL strings.
+            id raw = argsMap[@"items"] ?: argsMap[@"urls"];
+            int startIndex = [argsMap[@"startIndex"] intValue];
+            NSMutableArray<NSDictionary*>* items = [NSMutableArray array];
+            if ([raw isKindOfClass:[NSArray class]]) {
+                for (id entry in (NSArray*)raw) {
+                    if ([entry isKindOfClass:[NSDictionary class]]) {
+                        [items addObject:(NSDictionary*)entry];
+                    } else if ([entry isKindOfClass:[NSString class]]) {
+                        [items addObject:@{@"uri": entry}];
+                    }
+                }
+            }
+            [player setPlaylistItems:items startIndex:startIndex];
+            result(nil);
+        } else if ([@"setAutoPictureInPictureMode" isEqualToString:call.method]){
+            BOOL enabled = [argsMap[@"enabled"] boolValue];
+            if (enabled) {
+                _notificationPlayer = player;
+                [self setRemoteCommandsNotificationActive];
+                [self setupRemoteCommands:player];
+            } else if (_notificationPlayer == player) {
+                if (![player isPipActive]) {
+                    _notificationPlayer = nil;
+                }
+            }
+            [player setAutoPictureInPictureMode:enabled];
+            result(nil);
         } else if ([@"enablePictureInPicture" isEqualToString:call.method]){
             double left = [argsMap[@"left"] doubleValue];
             double top = [argsMap[@"top"] doubleValue];
             double width = [argsMap[@"width"] doubleValue];
             double height = [argsMap[@"height"] doubleValue];
+            _notificationPlayer = player;
+            [self setRemoteCommandsNotificationActive];
+            [self setupRemoteCommands:player];
             [player enablePictureInPicture:CGRectMake(left, top, width, height)];
         } else if ([@"isPictureInPictureSupported" isEqualToString:call.method]){
             if (@available(iOS 9.0, *)){
@@ -422,6 +514,9 @@ bool _remoteCommandsInitialized = false;
         } else if ([@"disablePictureInPicture" isEqualToString:call.method]){
             [player disablePictureInPicture];
             [player setPictureInPicture:false];
+            if (_notificationPlayer == player && ![player isPipActive]) {
+                _notificationPlayer = nil;
+            }
         } else if ([@"setAudioTrack" isEqualToString:call.method]){
             NSString* name = argsMap[@"name"];
             int index = [argsMap[@"index"] intValue];

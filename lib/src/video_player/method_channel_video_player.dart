@@ -243,6 +243,24 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
+  Future<void> setPlaylist(int? textureId, List<Map<String, dynamic>> items,
+      {int startIndex = 0}) {
+    return _channel.invokeMethod<void>('setPlaylist', <String, dynamic>{
+      'textureId': textureId,
+      'items': items,
+      'startIndex': startIndex,
+    });
+  }
+
+  @override
+  Future<void> setAutoPictureInPictureMode(int? textureId, bool enabled) {
+    return _channel.invokeMethod<void>(
+      'setAutoPictureInPictureMode',
+      <String, dynamic>{'textureId': textureId, 'enabled': enabled},
+    );
+  }
+
+  @override
   Future<void> disablePictureInPicture(int? textureId) {
     return _channel.invokeMethod<bool>(
       'disablePictureInPicture',
@@ -368,6 +386,13 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
 
         case 'pipStop':
           return VideoEvent(eventType: VideoEventType.pipStop, key: key);
+
+        case 'playlistIndexChanged':
+          return VideoEvent(
+            eventType: VideoEventType.playlistIndexChanged,
+            key: key,
+            playlistIndex: (map['index'] as num?)?.toInt(),
+          );
 
         default:
           return VideoEvent(eventType: VideoEventType.unknown, key: key);

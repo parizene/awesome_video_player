@@ -4,15 +4,23 @@
 package uz.shs.better_player_plus
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.util.LongSparseArray
 import android.util.Rational
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.media3.common.MediaItem
 import uz.shs.better_player_plus.BetterPlayerCache.releaseCache
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -40,6 +48,11 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
     private var activity: Activity? = null
     private var pipHandler: Handler? = null
     private var pipRunnable: Runnable? = null
+    private var pipReceiver: PipActionReceiver? = null
+    private var pipPlayer: BetterPlayer? = null
+    private var pipModeChangeListener: ((Boolean) -> Unit)? = null
+
+    private var pipAutoEnter: Boolean = false
     override fun onAttachedToEngine(binding: FlutterPluginBinding) {
         val loader = FlutterLoader()
         flutterState = FlutterState(
@@ -163,6 +176,46 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         when (call.method) {
             SET_DATA_SOURCE_METHOD -> {
                 setDataSource(call, result, player)
+            }
+
+            SET_PLAYLIST_METHOD -> {
+                @Suppress("UNCHECKED_CAST")
+                val rawItems = call.argument<List<Any?>>("items")
+                    ?: call.argument<List<String>>("urls")
+                    ?: emptyList<Any?>()
+                val startIndex = call.argument<Int>("startIndex") ?: 0
+                val items: List<Map<String, Any?>> = rawItems.mapNotNull { entry ->
+                    when (entry) {
+                        is Map<*, *> -> @Suppress("UNCHECKED_CAST") (entry as Map<String, Any?>)
+                        is String -> mapOf("uri" to entry)
+                        else -> null
+                    }
+                }
+                if (items.isEmpty()) {
+                    result.error(
+                        "INVALID_ARGUMENT",
+                        "setPlaylist requires at least one item",
+                        null,
+                    )
+                    return
+                }
+                try {
+                    player.setPlaylistItems(
+                        flutterState!!.applicationContext,
+                        items,
+                        startIndex,
+                    )
+                    result.success(null)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "setPlaylist failed", e)
+                    result.error("PLAYLIST_FAILED", e.message, null)
+                }
+            }
+
+            SET_AUTO_PIP_MODE_METHOD -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                setAutoPictureInPictureMode(player, enabled)
+                result.success(null)
             }
 
             SET_LOOPING_METHOD -> {
@@ -323,12 +376,6 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         }
     }
 
-    /**
-     * Start pre cache of video.
-     *
-     * @param call   - invoked method data
-     * @param result - result which should be updated
-     */
     private fun preCache(call: MethodCall, result: MethodChannel.Result) {
         val dataSource = call.argument<Map<String, Any?>>(DATA_SOURCE_PARAMETER)
         if (dataSource != null) {
@@ -358,12 +405,6 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         }
     }
 
-    /**
-     * Stop pre cache video process (if exists).
-     *
-     * @param call   - invoked method data
-     * @param result - result which should be updated
-     */
     private fun stopPreCache(call: MethodCall, result: MethodChannel.Result) {
         val url = call.argument<String>(URL_PARAMETER)
         BetterPlayer.stopPreCache(flutterState?.applicationContext, url, result)
@@ -438,41 +479,321 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
     }
 
     private fun enablePictureInPicture(player: BetterPlayer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            player.setupMediaSession(flutterState!!.applicationContext)
-            activity!!.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(
-                Rational(16, 9)
-            ).build())
-            startPictureInPictureListenerTimer(player)
-            player.onPictureInPictureStatusChanged(true)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val act = activity ?: return
+        player.setupMediaSession(flutterState!!.applicationContext)
+        registerPipReceiver(player)
+
+        try {
+            act.enterPictureInPictureMode(buildPipParams(player))
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "enterPictureInPictureMode failed", e)
+            unregisterPipReceiver()
+            return
         }
+
+        installPipModeListener(player)
+        player.onPictureInPictureStatusChanged(true)
     }
 
     private fun disablePictureInPicture(player: BetterPlayer) {
+        pipAutoEnter = false
+        unregisterPipReceiver()
+        removePipModeListener()
         stopPipHandler()
-        activity!!.moveTaskToBack(false)
         player.onPictureInPictureStatusChanged(false)
         player.disposeMediaSession()
     }
 
-    private fun startPictureInPictureListenerTimer(player: BetterPlayer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            pipHandler = Handler(Looper.getMainLooper())
-            pipRunnable = Runnable {
-                if (activity!!.isInPictureInPictureMode) {
-                    pipHandler!!.postDelayed(pipRunnable!!, 100)
-                } else {
-                    player.onPictureInPictureStatusChanged(false)
-                    player.disposeMediaSession()
-                    stopPipHandler()
-                }
+    private fun registerPipReceiver(player: BetterPlayer) {
+        unregisterPipReceiver()
+        val appCtx = flutterState?.applicationContext ?: return
+        val receiver = PipActionReceiver(player) { applyPipParams(player) }
+        val filter = IntentFilter().apply {
+            addAction(PipActionReceiver.ACTION_REWIND)
+            addAction(PipActionReceiver.ACTION_FORWARD)
+            addAction(PipActionReceiver.ACTION_TOGGLE)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appCtx.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            appCtx.registerReceiver(receiver, filter)
+        }
+        pipReceiver = receiver
+        pipPlayer = player
+        player.pipPlayStateListener = { applyPipParams(player) }
+        player.pipEndReachedListener = { dismissPipForEndOfVideo(player) }
+    }
+
+    private fun unregisterPipReceiver() {
+        val rec = pipReceiver ?: return
+        try {
+            flutterState?.applicationContext?.unregisterReceiver(rec)
+        } catch (_: IllegalArgumentException) {
+            // already unregistered
+        }
+        pipPlayer?.pipPlayStateListener = null
+        pipPlayer?.pipEndReachedListener = null
+        pipReceiver = null
+        pipPlayer = null
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun dismissPipForEndOfVideo(player: BetterPlayer) {
+        val act = activity ?: return
+        pipAutoEnter = false
+        applyPipParams(player)
+        if (act.isInPictureInPictureMode) {
+            try {
+                act.moveTaskToBack(true)
+            } catch (e: Throwable) {
+                Log.e(TAG, "moveTaskToBack on PiP end-of-video failed", e)
             }
-            pipHandler!!.post(pipRunnable!!)
         }
     }
 
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun applyPipParams(player: BetterPlayer) {
+        val act = activity ?: return
+        try {
+            act.setPictureInPictureParams(buildPipParams(player))
+        } catch (_: IllegalStateException) {
+            // Activity is leaving PiP / not in a state that accepts params.
+        }
+    }
+
+    private fun setAutoPictureInPictureMode(player: BetterPlayer, enabled: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (enabled) {
+            pipAutoEnter = true
+            // MediaSession + BroadcastReceiver setup is deferred to actual PiP entry
+            // (too expensive at arm time; installPipModeListener does it lazily).
+            applyPipParams(player)
+            installPipModeListener(player)
+        } else {
+            pipAutoEnter = false
+            applyPipParams(player)
+            val act = activity
+            // If PiP is currently active, let the mode listener finish the cycle.
+            if (act != null && !act.isInPictureInPictureMode) {
+                unregisterPipReceiver()
+                removePipModeListener()
+                player.disposeMediaSession()
+            }
+        }
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun buildPipParams(player: BetterPlayer): PictureInPictureParams {
+        val ctx = flutterState!!.applicationContext
+        // isActuallyPlaying (not isPlaying) so the icon matches frozen frames during STATE_BUFFERING.
+        val playing = player.isActuallyPlaying
+        val builder = PictureInPictureParams.Builder()
+
+        val size = player.videoSize
+        val ratio = if (size != null) clampedRational(size.first, size.second)
+                    else Rational(9, 16)
+        builder.setAspectRatio(ratio)
+
+        val allActions = listOf(
+            remoteAction(
+                ctx,
+                PipActionReceiver.ACTION_REWIND,
+                PipActionReceiver.REQ_REWIND,
+                android.R.drawable.ic_media_rew,
+                "Rewind 10s",
+            ),
+            remoteAction(
+                ctx,
+                PipActionReceiver.ACTION_TOGGLE,
+                PipActionReceiver.REQ_TOGGLE,
+                if (playing) android.R.drawable.ic_media_pause
+                else android.R.drawable.ic_media_play,
+                if (playing) "Pause" else "Play",
+            ),
+            remoteAction(
+                ctx,
+                PipActionReceiver.ACTION_FORWARD,
+                PipActionReceiver.REQ_FORWARD,
+                android.R.drawable.ic_media_ff,
+                "Forward 10s",
+            ),
+        )
+        val maxActions = activity?.maxNumPictureInPictureActions ?: 3
+        builder.setActions(allActions.take(maxActions.coerceAtLeast(0)))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && pipAutoEnter) {
+            builder.setAutoEnterEnabled(true)
+            builder.setSeamlessResizeEnabled(true)
+        }
+        return builder.build()
+    }
+
+    // Falls back to 9:16 if ratio is outside the PiP-allowed range [1:2.39, 2.39:1].
+    private fun clampedRational(w: Int, h: Int): Rational {
+        if (w <= 0 || h <= 0) return Rational(9, 16)
+        val ratio = Rational(w, h)
+        val asDouble = ratio.toDouble()
+        val min = 1.0 / 2.39
+        val max = 2.39
+        return if (asDouble in min..max) ratio else Rational(9, 16)
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun remoteAction(
+        ctx: Context,
+        action: String,
+        requestCode: Int,
+        iconRes: Int,
+        title: String,
+    ): RemoteAction {
+        val intent = Intent(action).setPackage(ctx.packageName)
+        val flags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            else PendingIntent.FLAG_UPDATE_CURRENT
+        val pi = PendingIntent.getBroadcast(ctx, requestCode, intent, flags)
+        return RemoteAction(Icon.createWithResource(ctx, iconRes), title, title, pi)
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun installPipModeListener(player: BetterPlayer) {
+        val act = activity ?: return
+        if (pipHandler != null) return
+
+        var lastInPip = act.isInPictureInPictureMode
+        pipHandler = Handler(Looper.getMainLooper())
+        pipRunnable = object : Runnable {
+            override fun run() {
+                val a = activity
+                if (a == null) {
+                    stopPipHandler()
+                    return
+                }
+                val cur = a.isInPictureInPictureMode
+                if (cur != lastInPip) {
+                    lastInPip = cur
+                    player.onPictureInPictureStatusChanged(cur)
+                    if (cur) {
+                        // Lazily install MediaSession + BroadcastReceiver deferred from arm time.
+                        if (pipReceiver == null) {
+                            try {
+                                player.setupMediaSession(flutterState!!.applicationContext)
+                                registerPipReceiver(player)
+                                applyPipParams(player)
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "Lazy PiP setup failed", e)
+                            }
+                        }
+                    } else {
+                        // PiP exited — pause if user tapped X (activity left screen), not Expand.
+                        pauseIfActivityNotForegroundAfterPipExit(player)
+                        unregisterPipReceiver()
+                        player.disposeMediaSession()
+
+                        if (pipAutoEnter) {
+                            // Re-arm setAutoEnterEnabled for the next backgrounding.
+                            applyPipParams(player)
+                        } else {
+                            removePipModeListener()
+                            stopPipHandler()
+                            return
+                        }
+                    }
+                }
+                if (cur || pipAutoEnter) {
+                    pipHandler?.postDelayed(this, 250)
+                } else {
+                    stopPipHandler()
+                }
+            }
+        }
+        pipHandler?.postDelayed(pipRunnable!!, 250)
+    }
+
+    // Pauses only on PiP-Close (X), not on Expand. Uses lifecycle events to distinguish;
+    // ON_RESUME/ON_START = Expand, ON_STOP = X. 800ms timeout as safety fallback.
+    private fun pauseIfActivityNotForegroundAfterPipExit(player: BetterPlayer) {
+        val a = activity ?: return
+        val owner = a as? LifecycleOwner
+        if (owner == null) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                val act = activity ?: return@postDelayed
+                if (!act.isInPictureInPictureMode &&
+                    act.window?.decorView?.isShown != true) {
+                    try { player.pause() } catch (_: Throwable) {}
+                }
+            }, 600)
+            return
+        }
+
+        val mainHandler = Handler(Looper.getMainLooper())
+        val timeoutMarker = Any()
+        var settled = false
+        lateinit var observer: androidx.lifecycle.LifecycleEventObserver
+        observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (settled) return@LifecycleEventObserver
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME,
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    settled = true
+                    owner.lifecycle.removeObserver(observer)
+                    mainHandler.removeCallbacksAndMessages(timeoutMarker)
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_STOP,
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
+                    settled = true
+                    owner.lifecycle.removeObserver(observer)
+                    mainHandler.removeCallbacksAndMessages(timeoutMarker)
+                    try {
+                        player.pause()
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Failed to pause player after PiP X-tap", e)
+                    }
+                }
+                else -> {}
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+
+        val timeoutRunnable = Runnable {
+            if (settled) return@Runnable
+            settled = true
+            owner.lifecycle.removeObserver(observer)
+            val isVisible = owner.lifecycle.currentState
+                .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            if (!isVisible) {
+                try { player.pause() } catch (_: Throwable) {}
+            }
+        }
+        mainHandler.postAtTime(
+            timeoutRunnable,
+            timeoutMarker,
+            android.os.SystemClock.uptimeMillis() + 800,
+        )
+    }
+
+    private fun removePipModeListener() {
+        pipModeChangeListener = null
+        stopPipHandler()
+    }
+
     private fun dispose(player: BetterPlayer, textureId: Long) {
-        player.dispose()
+        if (pipPlayer === player) {
+            pipAutoEnter = false
+            unregisterPipReceiver()
+            removePipModeListener()
+            try {
+                player.disposeMediaSession()
+            } catch (e: Throwable) {
+                Log.e(TAG, "disposeMediaSession on plugin dispose failed", e)
+            }
+        }
+        try {
+            player.dispose()
+        } catch (e: Throwable) {
+            Log.e(TAG, "player.dispose() failed", e)
+        }
         videoPlayers.remove(textureId)
         dataSources.remove(textureId)
         updateKeepScreenOnFlag()
@@ -574,6 +895,8 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val INIT_METHOD = "init"
         private const val CREATE_METHOD = "create"
         private const val SET_DATA_SOURCE_METHOD = "setDataSource"
+        private const val SET_PLAYLIST_METHOD = "setPlaylist"
+        private const val SET_AUTO_PIP_MODE_METHOD = "setAutoPictureInPictureMode"
         private const val SET_LOOPING_METHOD = "setLooping"
         private const val SET_VOLUME_METHOD = "setVolume"
         private const val PLAY_METHOD = "play"

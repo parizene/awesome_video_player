@@ -72,6 +72,18 @@ class BetterPlayerController {
   ///Currently used data source in player.
   BetterPlayerDataSource? get betterPlayerDataSource => _betterPlayerDataSource;
 
+  ///Native playlist sources (when [setupPlaylist] is used). Native side owns the queue.
+  List<BetterPlayerDataSource>? _nativePlaylistSources;
+
+  ///Currently active index inside [_nativePlaylistSources].
+  int _nativePlaylistIndex = 0;
+
+  ///Currently active index inside the native playlist.
+  int get nativePlaylistIndex => _nativePlaylistIndex;
+
+  ///Whether the controller currently uses the native-owned playlist.
+  bool get isNativePlaylist => _nativePlaylistSources != null;
+
   ///List of BetterPlayerSubtitlesSources.
   final List<BetterPlayerSubtitlesSource> _betterPlayerSubtitlesSourceList = [];
 
@@ -1101,6 +1113,149 @@ class BetterPlayerController {
     }
   }
 
+  ///Setup a native playlist. The native player keeps the full queue so that
+  ///PiP transitions across items are seamless (no surface flash on Android,
+  ///PiP window stays open on iOS). All sources must be [BetterPlayerDataSourceType.network].
+  Future<void> setupPlaylist(List<BetterPlayerDataSource> sources,
+      {int startIndex = 0}) async {
+    if (sources.isEmpty) {
+      throw ArgumentError("Playlist must contain at least one source.");
+    }
+    for (final s in sources) {
+      if (s.type != BetterPlayerDataSourceType.network) {
+        throw ArgumentError(
+            "setupPlaylist only supports network data sources.");
+      }
+    }
+    _nativePlaylistSources = sources;
+    _nativePlaylistIndex = startIndex.clamp(0, sources.length - 1);
+    _betterPlayerDataSource = sources[_nativePlaylistIndex];
+    // Mirror the events the single-source path fires, so listeners that depend
+    // on them (controls overlay, progress bar, analytics) initialize properly.
+    postEvent(BetterPlayerEvent(
+      BetterPlayerEventType.setupDataSource,
+      parameters: <String, dynamic>{
+        _dataSourceParameter: _betterPlayerDataSource,
+      },
+    ));
+    _postControllerEvent(BetterPlayerControllerEvent.setupDataSource);
+
+    // Build the underlying VideoPlayerController without invoking the
+    // single-source setNetworkDataSource path. Going through setupDataSource
+    // here would (a) trigger a redundant native prepare for the start item
+    // that setPlaylist immediately replaces and (b) emit the `initialized`
+    // event twice on Android.
+    if (videoPlayerController == null) {
+      videoPlayerController = VideoPlayerController(
+        bufferingConfiguration:
+            sources[_nativePlaylistIndex].bufferingConfiguration,
+      );
+      videoPlayerController!.addListener(_onVideoPlayerChanged);
+      _videoEventStreamSubscription?.cancel();
+      _videoEventStreamSubscription = videoPlayerController!
+          .videoEventStreamController.stream
+          .listen(_handleVideoEvent);
+    }
+
+    final items = sources.map(_buildNativePlaylistEntry).toList();
+    await videoPlayerController!
+        .setPlaylist(items, startIndex: _nativePlaylistIndex);
+
+    // Per-item ASMS / subtitle setup for the start item (mirrors what
+    // setupDataSource would have done on the single-source path). On
+    // playlistIndexChanged we re-run this for the new active source.
+    await _applyPlaylistItemSetup(_nativePlaylistIndex);
+
+    _postEvent(BetterPlayerEvent(BetterPlayerEventType.changedPlaylistItem,
+        parameters: <String, dynamic>{"index": _nativePlaylistIndex}));
+  }
+
+  /// Translate a [BetterPlayerDataSource] into the map shape understood by
+  /// the native `setPlaylist` channel call. Carries everything that affects
+  /// network access (headers, DRM, cache key) so signed/DRM-protected URLs
+  /// keep working past the first item.
+  Map<String, dynamic> _buildNativePlaylistEntry(BetterPlayerDataSource s) {
+    final headers = <String, String>{};
+    if (s.headers != null) headers.addAll(s.headers!);
+    if (s.drmConfiguration?.drmType == BetterPlayerDrmType.token &&
+        s.drmConfiguration?.token != null) {
+      headers[_authorizationHeader] = s.drmConfiguration!.token!;
+    }
+    return <String, dynamic>{
+      'uri': s.url,
+      if (headers.isNotEmpty) 'headers': headers,
+      if (s.cacheConfiguration?.key != null) 'cacheKey': s.cacheConfiguration!.key,
+      if (s.videoFormat != null) 'formatHint': _videoFormatHint(s.videoFormat!),
+      if (s.drmConfiguration?.licenseUrl != null)
+        'licenseUrl': s.drmConfiguration!.licenseUrl,
+      if (s.drmConfiguration?.certificateUrl != null)
+        'certificateUrl': s.drmConfiguration!.certificateUrl,
+      if (s.drmConfiguration?.headers != null)
+        'drmHeaders': s.drmConfiguration!.headers,
+      if (s.drmConfiguration?.clearKey != null)
+        'clearKey': s.drmConfiguration!.clearKey,
+    };
+  }
+
+  String? _videoFormatHint(BetterPlayerVideoFormat fmt) {
+    switch (fmt) {
+      case BetterPlayerVideoFormat.dash:
+        return 'dash';
+      case BetterPlayerVideoFormat.hls:
+        return 'hls';
+      case BetterPlayerVideoFormat.ss:
+        return 'ss';
+      case BetterPlayerVideoFormat.other:
+        return 'other';
+    }
+  }
+
+  /// Re-run subtitle / ASMS setup for the source at [index]. The native player
+  /// already advanced to it; this keeps Dart-side caches (subtitlesLines,
+  /// asms tracks/audio) in sync so the UI doesn't render stale subtitles
+  /// from the previous episode.
+  Future<void> _applyPlaylistItemSetup(int index) async {
+    final sources = _nativePlaylistSources;
+    if (sources == null || index < 0 || index >= sources.length) return;
+    final ds = sources[index];
+
+    _hasCurrentDataSourceStarted = false;
+    _hasCurrentDataSourceInitialized = false;
+    _betterPlayerSubtitlesSourceList.clear();
+    subtitlesLines.clear();
+    _asmsSegmentsLoaded.clear();
+    _asmsSegmentsLoading = false;
+    betterPlayerAsmsTracks.clear();
+    _betterPlayerAsmsAudioTracks = null;
+    _betterPlayerAsmsAudioTrack = null;
+
+    if (ds.subtitles != null) {
+      _betterPlayerSubtitlesSourceList.addAll(ds.subtitles!);
+    }
+
+    if (_isDataSourceAsms(ds)) {
+      try {
+        await _setupAsmsDataSource(ds);
+      } catch (e) {
+        BetterPlayerUtils.log('Playlist ASMS setup failed: $e');
+      }
+    }
+    _setupSubtitles();
+    setTrack(BetterPlayerAsmsTrack.defaultTrack());
+  }
+
+  /// Programmatically toggle automatic Picture-in-Picture entry when the user
+  /// backgrounds the app. On Android (API 31+) it sets
+  /// [PictureInPictureParams.setAutoEnterEnabled]; on iOS (14.2+) it sets
+  /// `canStartPictureInPictureAutomaticallyFromInline` on the AVPlayerLayer
+  /// PiP controller. No-op on older OS versions.
+  Future<void> setAutoPictureInPictureMode(bool enabled) async {
+    if (videoPlayerController == null) {
+      throw StateError("The data source has not been initialized");
+    }
+    await videoPlayerController!.setAutoPictureInPictureMode(enabled);
+  }
+
   ///Disable Picture in Picture mode if it's enabled.
   Future<void>? disablePictureInPicture() {
     if (videoPlayerController == null) {
@@ -1162,6 +1317,24 @@ class BetterPlayerController {
         break;
       case VideoEventType.bufferingEnd:
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
+        break;
+      case VideoEventType.playlistIndexChanged:
+        final newIndex = event.playlistIndex ?? _nativePlaylistIndex;
+        if (newIndex == _nativePlaylistIndex) {
+          // No-op: same index emitted twice (KVO fires on initial item set).
+          break;
+        }
+        _nativePlaylistIndex = newIndex;
+        if (_nativePlaylistSources != null &&
+            newIndex >= 0 &&
+            newIndex < _nativePlaylistSources!.length) {
+          _betterPlayerDataSource = _nativePlaylistSources![newIndex];
+          // Refresh per-item subtitles / ASMS tracks; otherwise the Flutter
+          // overlay would keep rendering captions from the previous episode.
+          await _applyPlaylistItemSetup(newIndex);
+        }
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.changedPlaylistItem,
+            parameters: <String, dynamic>{"index": newIndex}));
         break;
       default:
 

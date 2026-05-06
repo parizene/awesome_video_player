@@ -144,6 +144,16 @@ abstract class VideoPlayerPlatform {
         'enablePictureInPicture() has not been implemented.');
   }
 
+  Future<void> setPlaylist(int? textureId, List<Map<String, dynamic>> items,
+      {int startIndex = 0}) {
+    throw UnimplementedError('setPlaylist() has not been implemented.');
+  }
+
+  Future<void> setAutoPictureInPictureMode(int? textureId, bool enabled) {
+    throw UnimplementedError(
+        'setAutoPictureInPictureMode() has not been implemented.');
+  }
+
   ///Disables PiP mode.
   Future<void> disablePictureInPicture(int? textureId) {
     throw UnimplementedError(
@@ -384,6 +394,7 @@ class VideoEvent {
     this.size,
     this.buffered,
     this.position,
+    this.playlistIndex,
   });
 
   /// The type of the event.
@@ -411,6 +422,9 @@ class VideoEvent {
 
   ///Seek position
   final Duration? position;
+
+  ///Playlist index for [VideoEventType.playlistIndexChanged].
+  final int? playlistIndex;
 
   @override
   bool operator ==(Object other) {
@@ -466,6 +480,9 @@ enum VideoEventType {
 
   /// Picture in picture mode has been dismissed
   pipStop,
+
+  /// Native playlist advanced to a new index
+  playlistIndexChanged,
 
   /// An unknown event has been received.
   unknown,

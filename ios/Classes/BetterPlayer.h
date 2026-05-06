@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 @class CacheManager;
 
 @interface BetterPlayer : NSObject <FlutterPlatformView, FlutterStreamHandler, AVPictureInPictureControllerDelegate>
-@property(readonly, nonatomic) AVPlayer* player;
+@property(readonly, nonatomic) AVQueuePlayer* player;
 @property(readonly, nonatomic) BetterPlayerEzDrmAssetsLoaderDelegate* loaderDelegate;
 @property(nonatomic) FlutterEventChannel* eventChannel;
 @property(nonatomic) FlutterEventSink eventSink;
@@ -34,7 +34,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) bool isStalledCheckStarted;
 @property(nonatomic) float playerRate;
 @property(nonatomic) int overriddenDuration;
-@property(nonatomic) AVPlayerTimeControlStatus lastAvPlayerTimeControlStatus;
 @property(nonatomic) CGSize cachedNaturalSize;
 @property(nonatomic) CGAffineTransform cachedPreferredTransform;
 @property(nonatomic) CMTime cachedDuration;
@@ -59,6 +58,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setSpeed:(double)speed result:(FlutterResult)result;
 - (void) setAudioTrack:(NSString*) name index:(int) index;
 - (void)setTrackParameters:(int) width: (int) height: (int)bitrate;
+/// `items` entries: { uri, headers?, licenseUrl?, certificateUrl?, cacheKey? }.
+- (void)setPlaylistItems:(NSArray<NSDictionary*>*)items startIndex:(int)startIndex;
+- (void)nativeSkip:(NSInteger)deltaSeconds;
+- (void)setAutoPictureInPictureMode:(BOOL)enabled;
+/// True when this instance's PiP controller is currently presenting a PiP
+/// window. NO if PiP isn't supported or wasn't started.
+- (BOOL)isPipActive;
 - (void) enablePictureInPicture: (CGRect) frame;
 - (void)setPictureInPicture:(BOOL)pictureInPicture;
 - (void)disablePictureInPicture;
