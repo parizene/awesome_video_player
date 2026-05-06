@@ -149,19 +149,28 @@ class _BetterPlayerSubtitlesDrawerState
 
   Widget _getTextWithStroke(String subtitleText) {
     final textAlign = _alignmentToTextAlign(_configuration!.alignment);
+    final bool containsHtml = htmlRegExp.hasMatch(subtitleText);
     return Container(
       color: _configuration!.backgroundColor,
       padding: _configuration!.innerPadding,
       child: Stack(
         children: [
           if (_configuration!.outlineEnabled)
-            _buildHtmlWidget(subtitleText, _outerTextStyle, textAlign)
+            _buildTextLayer(subtitleText, _outerTextStyle, textAlign, containsHtml)
           else
             const SizedBox(),
-          _buildHtmlWidget(subtitleText, _innerTextStyle, textAlign)
+          _buildTextLayer(subtitleText, _innerTextStyle, textAlign, containsHtml)
         ],
       ),
     );
+  }
+
+  Widget _buildTextLayer(
+      String text, TextStyle textStyle, TextAlign textAlign, bool containsHtml) {
+    if (!containsHtml) {
+      return Text(text, style: textStyle, textAlign: textAlign);
+    }
+    return _buildHtmlWidget(text, textStyle, textAlign);
   }
 
   Widget _buildHtmlWidget(String text, TextStyle textStyle, TextAlign textAlign) {
