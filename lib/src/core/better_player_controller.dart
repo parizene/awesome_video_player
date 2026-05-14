@@ -262,31 +262,37 @@ class BetterPlayerController {
           .addAll(betterPlayerDataSource.subtitles!);
     }
 
-    if (_isDataSourceAsms(betterPlayerDataSource)) {
-      _setupAsmsDataSource(betterPlayerDataSource).then((dynamic value) {
-        _setupSubtitles();
-      });
-    } else {
-      _setupSubtitles();
-    }
+    final Future<void> subtitlesFuture = _isDataSourceAsms(betterPlayerDataSource)
+        ? _setupAsmsDataSource(betterPlayerDataSource)
+            .catchError((dynamic _) {})
+            .then((_) => _setupSubtitles())
+        : _setupSubtitles();
 
-    ///Process data source
     await _setupDataSource(betterPlayerDataSource);
+    await subtitlesFuture.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () => BetterPlayerUtils.log(
+          "Subtitles not ready 2s after native init; starting without them"),
+    );
+    if (_disposed) return;
     setTrack(BetterPlayerAsmsTrack.defaultTrack());
   }
 
   ///Configure subtitles based on subtitles source.
-  void _setupSubtitles() {
+  Future<void> _setupSubtitles() async {
     _betterPlayerSubtitlesSourceList.add(
       BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
     );
     final defaultSubtitle = _betterPlayerSubtitlesSourceList
         .firstWhereOrNull((element) => element.selectedByDefault == true);
 
-    ///Setup subtitles (none is default)
-    setupSubtitleSource(
-        defaultSubtitle ?? _betterPlayerSubtitlesSourceList.last,
-        sourceInitialize: true);
+    try {
+      await setupSubtitleSource(
+          defaultSubtitle ?? _betterPlayerSubtitlesSourceList.last,
+          sourceInitialize: true);
+    } catch (e) {
+      BetterPlayerUtils.log("Failed to setup default subtitles: $e");
+    }
   }
 
   ///Check if given [betterPlayerDataSource] is HLS / DASH-type data source.
