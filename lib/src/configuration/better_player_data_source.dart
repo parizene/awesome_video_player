@@ -80,6 +80,14 @@ class BetterPlayerDataSource {
   ///Defaults to null, which means the value from BetterPlayerConfiguration will be used.
   final bool? allowedScreenSleep;
 
+  ///Preferred subtitle language code (e.g. "en", "ar"). If matched after
+  ///manifest parsing, that source is selected; otherwise none. Falls back to
+  ///HLS DEFAULT when null. Ignored if [forceDisableSubtitles] is true.
+  final String? preferredSubtitleLanguage;
+
+  ///Force subtitles off; overrides HLS defaults and [preferredSubtitleLanguage].
+  final bool forceDisableSubtitles;
+
   BetterPlayerDataSource(
     this.type,
     this.url, {
@@ -104,6 +112,8 @@ class BetterPlayerDataSource {
     this.placeholder,
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
     this.allowedScreenSleep,
+    this.preferredSubtitleLanguage,
+    this.forceDisableSubtitles = false,
   }) : assert(
             (type == BetterPlayerDataSourceType.network ||
                     type == BetterPlayerDataSourceType.file) ||
@@ -131,6 +141,8 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerBufferingConfiguration bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
+    String? preferredSubtitleLanguage,
+    bool forceDisableSubtitles = false,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
@@ -149,6 +161,8 @@ class BetterPlayerDataSource {
       drmConfiguration: drmConfiguration,
       placeholder: placeholder,
       bufferingConfiguration: bufferingConfiguration,
+      preferredSubtitleLanguage: preferredSubtitleLanguage,
+      forceDisableSubtitles: forceDisableSubtitles,
     );
   }
 
@@ -232,6 +246,8 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerBufferingConfiguration? bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
+    String? preferredSubtitleLanguage,
+    bool? forceDisableSubtitles,
   }) {
     return BetterPlayerDataSource(
       type ?? this.type,
@@ -254,6 +270,10 @@ class BetterPlayerDataSource {
       placeholder: placeholder ?? this.placeholder,
       bufferingConfiguration:
           bufferingConfiguration ?? this.bufferingConfiguration,
+      preferredSubtitleLanguage:
+          preferredSubtitleLanguage ?? this.preferredSubtitleLanguage,
+      forceDisableSubtitles:
+          forceDisableSubtitles ?? this.forceDisableSubtitles,
     );
   }
 }

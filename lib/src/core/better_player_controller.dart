@@ -115,6 +115,8 @@ class BetterPlayerController {
   ///Has player been disposed.
   bool _disposed = false;
 
+  bool _userPickedSubtitle = false;
+
   ///Was player playing before automatic pause.
   bool? _wasPlayingBeforePause;
 
@@ -240,6 +242,7 @@ class BetterPlayerController {
     _postControllerEvent(BetterPlayerControllerEvent.setupDataSource);
     _hasCurrentDataSourceStarted = false;
     _hasCurrentDataSourceInitialized = false;
+    _userPickedSubtitle = false;
     _betterPlayerDataSource = betterPlayerDataSource;
     _betterPlayerSubtitlesSourceList.clear();
 
@@ -283,13 +286,29 @@ class BetterPlayerController {
     _betterPlayerSubtitlesSourceList.add(
       BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
     );
-    final defaultSubtitle = _betterPlayerSubtitlesSourceList
-        .firstWhereOrNull((element) => element.selectedByDefault == true);
+
+    if (_userPickedSubtitle) return;
+
+    final noneSource = _betterPlayerSubtitlesSourceList.last;
+    final BetterPlayerSubtitlesSource selected;
+    if (_betterPlayerDataSource?.forceDisableSubtitles == true) {
+      selected = noneSource;
+    } else if (_betterPlayerDataSource?.preferredSubtitleLanguage != null) {
+      final preferred =
+          _betterPlayerDataSource!.preferredSubtitleLanguage!.toLowerCase();
+      selected = _betterPlayerSubtitlesSourceList.firstWhereOrNull(
+            (s) => s.language?.toLowerCase() == preferred,
+          ) ??
+          noneSource;
+    } else {
+      selected = _betterPlayerSubtitlesSourceList.firstWhereOrNull(
+            (s) => s.selectedByDefault == true,
+          ) ??
+          noneSource;
+    }
 
     try {
-      await setupSubtitleSource(
-          defaultSubtitle ?? _betterPlayerSubtitlesSourceList.last,
-          sourceInitialize: true);
+      await setupSubtitleSource(selected, sourceInitialize: true);
     } catch (e) {
       BetterPlayerUtils.log("Failed to setup default subtitles: $e");
     }
@@ -355,6 +374,9 @@ class BetterPlayerController {
   ///will load with just in time policy.
   Future<void> setupSubtitleSource(BetterPlayerSubtitlesSource subtitlesSource,
       {bool sourceInitialize = false}) async {
+    if (!sourceInitialize) {
+      _userPickedSubtitle = true;
+    }
     _betterPlayerSubtitlesSource = subtitlesSource;
     subtitlesLines.clear();
     _asmsSegmentsLoaded.clear();
