@@ -291,7 +291,7 @@ class BetterPlayerController {
 
     final noneSource = _betterPlayerSubtitlesSourceList.last;
     final BetterPlayerSubtitlesSource selected;
-    if (_betterPlayerDataSource?.disableSubtitles == true) {
+    if (_betterPlayerDataSource?.forceDisableSubtitles == true) {
       selected = noneSource;
     } else if (_betterPlayerDataSource?.preferredSubtitleLanguage != null) {
       final preferred =
