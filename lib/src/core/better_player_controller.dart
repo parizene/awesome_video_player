@@ -391,7 +391,15 @@ class BetterPlayerController {
       subtitlesLines.addAll(subtitlesParsed);
     }
 
-    _postEvent(BetterPlayerEvent(BetterPlayerEventType.changedSubtitles));
+    _postEvent(BetterPlayerEvent(
+      BetterPlayerEventType.changedSubtitles,
+      parameters: <String, dynamic>{
+        "name": subtitlesSource.name,
+        "language": subtitlesSource.language,
+        "type": subtitlesSource.type?.name,
+        "isAutoApplied": sourceInitialize,
+      },
+    ));
     if (!_disposed && !sourceInitialize) {
       _postControllerEvent(BetterPlayerControllerEvent.changeSubtitles);
     }
