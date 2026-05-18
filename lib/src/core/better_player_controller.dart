@@ -290,28 +290,45 @@ class BetterPlayerController {
     if (_userPickedSubtitle) return;
 
     final noneSource = _betterPlayerSubtitlesSourceList.last;
-    final BetterPlayerSubtitlesSource selected;
-    if (_betterPlayerDataSource?.forceDisableSubtitles == true) {
-      selected = noneSource;
-    } else if (_betterPlayerDataSource?.preferredSubtitleLanguage != null) {
-      final preferred =
-          _betterPlayerDataSource!.preferredSubtitleLanguage!.toLowerCase();
-      selected = _betterPlayerSubtitlesSourceList.firstWhereOrNull(
-            (s) => s.language?.toLowerCase() == preferred,
-          ) ??
-          noneSource;
-    } else {
-      selected = _betterPlayerSubtitlesSourceList.firstWhereOrNull(
-            (s) => s.selectedByDefault == true,
-          ) ??
-          noneSource;
-    }
+    final selected = _resolveInitialSubtitleSource() ?? noneSource;
 
     try {
       await setupSubtitleSource(selected, sourceInitialize: true);
     } catch (e) {
       BetterPlayerUtils.log("Failed to setup default subtitles: $e");
     }
+  }
+
+  ///Pick subtitle source to auto-apply on init:
+  ///preferred → default → HLS DEFAULT (only when both are unset) → null.
+  BetterPlayerSubtitlesSource? _resolveInitialSubtitleSource() {
+    final source = _betterPlayerDataSource;
+    if (source == null || source.forceDisableSubtitles) return null;
+
+    final preferred = source.preferredSubtitleLanguage?.toLowerCase();
+    final defaultLang = source.defaultSubtitleLanguage?.toLowerCase();
+
+    BetterPlayerSubtitlesSource? defaultMatch;
+    for (final sub in _betterPlayerSubtitlesSourceList) {
+      final lang = sub.language?.toLowerCase();
+      if (lang != null) {
+        if (preferred != null && lang == preferred) {
+          return sub;
+        }
+
+        if (defaultLang != null && lang == defaultLang) {
+          defaultMatch ??= sub;
+        }
+      }
+    }
+    if (defaultMatch != null) return defaultMatch;
+
+    if (preferred == null && defaultLang == null) {
+      return _betterPlayerSubtitlesSourceList.firstWhereOrNull(
+        (s) => s.selectedByDefault == true,
+      );
+    }
+    return null;
   }
 
   ///Check if given [betterPlayerDataSource] is HLS / DASH-type data source.

@@ -80,12 +80,18 @@ class BetterPlayerDataSource {
   ///Defaults to null, which means the value from BetterPlayerConfiguration will be used.
   final bool? allowedScreenSleep;
 
-  ///Preferred subtitle language code (e.g. "en", "ar"). If matched after
-  ///manifest parsing, that source is selected; otherwise none. Falls back to
-  ///HLS DEFAULT when null. Ignored if [forceDisableSubtitles] is true.
+  ///Preferred subtitle language code (e.g. "en", "ar"). Selected if found in
+  ///the manifest; otherwise falls back to [defaultSubtitleLanguage] or none.
+  ///When both are null, falls back to HLS DEFAULT. Ignored when
+  ///[forceDisableSubtitles] is true.
   final String? preferredSubtitleLanguage;
 
-  ///Force subtitles off; overrides HLS defaults and [preferredSubtitleLanguage].
+  ///Fallback subtitle language code applied when [preferredSubtitleLanguage]
+  ///is null or not found in the manifest. Ignored when [forceDisableSubtitles]
+  ///is true.
+  final String? defaultSubtitleLanguage;
+
+  ///Force subtitles off; overrides every other setting.
   final bool forceDisableSubtitles;
 
   BetterPlayerDataSource(
@@ -113,6 +119,7 @@ class BetterPlayerDataSource {
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
     this.allowedScreenSleep,
     this.preferredSubtitleLanguage,
+    this.defaultSubtitleLanguage,
     this.forceDisableSubtitles = false,
   }) : assert(
             (type == BetterPlayerDataSourceType.network ||
@@ -142,6 +149,7 @@ class BetterPlayerDataSource {
     BetterPlayerBufferingConfiguration bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
     String? preferredSubtitleLanguage,
+    String? defaultSubtitleLanguage,
     bool forceDisableSubtitles = false,
   }) {
     return BetterPlayerDataSource(
@@ -162,6 +170,7 @@ class BetterPlayerDataSource {
       placeholder: placeholder,
       bufferingConfiguration: bufferingConfiguration,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      defaultSubtitleLanguage: defaultSubtitleLanguage,
       forceDisableSubtitles: forceDisableSubtitles,
     );
   }
@@ -247,6 +256,7 @@ class BetterPlayerDataSource {
     BetterPlayerBufferingConfiguration? bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
     String? preferredSubtitleLanguage,
+    String? defaultSubtitleLanguage,
     bool? forceDisableSubtitles,
   }) {
     return BetterPlayerDataSource(
@@ -272,6 +282,8 @@ class BetterPlayerDataSource {
           bufferingConfiguration ?? this.bufferingConfiguration,
       preferredSubtitleLanguage:
           preferredSubtitleLanguage ?? this.preferredSubtitleLanguage,
+      defaultSubtitleLanguage:
+          defaultSubtitleLanguage ?? this.defaultSubtitleLanguage,
       forceDisableSubtitles:
           forceDisableSubtitles ?? this.forceDisableSubtitles,
     );
