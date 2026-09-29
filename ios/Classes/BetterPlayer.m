@@ -271,6 +271,9 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     _stalledCount = 0;
     _isStalledCheckStarted = false;
     _playerRate = 1;
+    if (_preferredForwardBufferDuration > 0) {
+        item.preferredForwardBufferDuration = _preferredForwardBufferDuration;
+    }
     [_player replaceCurrentItemWithPlayerItem:item];
 
     AVAsset* asset = [item asset];

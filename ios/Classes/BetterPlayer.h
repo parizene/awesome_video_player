@@ -34,6 +34,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) bool isStalledCheckStarted;
 @property(nonatomic) float playerRate;
 @property(nonatomic) int overriddenDuration;
+@property(nonatomic) NSTimeInterval preferredForwardBufferDuration;
 @property(nonatomic) AVPlayerTimeControlStatus lastAvPlayerTimeControlStatus;
 @property(nonatomic) CGSize cachedNaturalSize;
 @property(nonatomic) CGAffineTransform cachedPreferredTransform;

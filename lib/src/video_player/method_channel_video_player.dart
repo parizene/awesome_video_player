@@ -40,6 +40,10 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             'bufferForPlaybackMs': bufferingConfiguration.bufferForPlaybackMs,
             'bufferForPlaybackAfterRebufferMs':
                 bufferingConfiguration.bufferForPlaybackAfterRebufferMs,
+            if (bufferingConfiguration.maxBufferMs !=
+                BetterPlayerBufferingConfiguration.defaultMaxBufferMs)
+              'preferredForwardBufferDurationMs':
+                  bufferingConfiguration.maxBufferMs,
           });
 
       response =

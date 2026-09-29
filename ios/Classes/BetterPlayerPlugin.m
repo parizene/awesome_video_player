@@ -290,6 +290,11 @@ bool _remoteCommandsInitialized = false;
         result(nil);
     } else if ([@"create" isEqualToString:call.method]) {
         BetterPlayer* player = [[BetterPlayer alloc] initWithFrame:CGRectZero];
+        NSDictionary* argsMap = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : nil;
+        id preferredForwardBufferDurationMs = argsMap[@"preferredForwardBufferDurationMs"];
+        if ([preferredForwardBufferDurationMs isKindOfClass:[NSNumber class]]) {
+            player.preferredForwardBufferDuration = [preferredForwardBufferDurationMs doubleValue] / 1000.0;
+        }
         [self onPlayerSetup:player result:result];
     } else {
         NSDictionary* argsMap = call.arguments;

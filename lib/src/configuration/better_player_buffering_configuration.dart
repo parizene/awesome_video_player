@@ -1,5 +1,6 @@
 ///Configuration class used to setup better buffering experience or setup custom
-///load settings. Currently used only in Android.
+///load settings. On iOS only a non-default [maxBufferMs] is used, as the
+///player item's preferred forward buffer duration.
 class BetterPlayerBufferingConfiguration {
   ///Constants values are from the offical exoplayer documentation
   ///https://exoplayer.dev/doc/reference/constant-values.html#com.google.android.exoplayer2.DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS
