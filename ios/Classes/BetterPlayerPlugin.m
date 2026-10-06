@@ -433,6 +433,7 @@ bool _remoteCommandsInitialized = false;
             [player setAudioTrack:name index: index];
         } else if ([@"setMixWithOthers" isEqualToString:call.method]){
             [player setMixWithOthers:[argsMap[@"mixWithOthers"] boolValue]];
+            result(nil);
         } else if ([@"preCache" isEqualToString:call.method]){
             NSDictionary* dataSource = argsMap[@"dataSource"];
             NSString* urlArg = dataSource[@"uri"];
