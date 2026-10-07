@@ -374,8 +374,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         return;
     }
 
-    if (_player.currentItem.playbackLikelyToKeepUp ||
-        [self availableDuration] - CMTimeGetSeconds(_player.currentItem.currentTime) > 10.0) {
+    if ([self canKeepPlaying]) {
         [self play];
     } else {
         _stalledCount++;
@@ -393,19 +392,32 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     }
 }
 
-- (NSTimeInterval) availableDuration
-{
-    NSArray *loadedTimeRanges = [[_player currentItem] loadedTimeRanges];
-    if (loadedTimeRanges.count > 0){
-        CMTimeRange timeRange = [[loadedTimeRanges objectAtIndex:0] CMTimeRangeValue];
-        Float64 startSeconds = CMTimeGetSeconds(timeRange.start);
-        Float64 durationSeconds = CMTimeGetSeconds(timeRange.duration);
-        NSTimeInterval result = startSeconds + durationSeconds;
-        return result;
-    } else {
+// Loaded seconds ahead of the current time, counted only in the range that contains it
+- (NSTimeInterval)bufferedAheadDuration {
+    AVPlayerItem* item = _player.currentItem;
+    if (item == nil) {
         return 0;
     }
+    CMTime currentTime = item.currentTime;
+    for (NSValue* rangeValue in item.loadedTimeRanges) {
+        CMTimeRange range = [rangeValue CMTimeRangeValue];
+        if (CMTimeRangeContainsTime(range, currentTime)) {
+            return CMTimeGetSeconds(CMTimeSubtract(CMTimeRangeGetEnd(range), currentTime));
+        }
+    }
+    return 0;
+}
 
+- (BOOL)canKeepPlaying {
+    AVPlayerItem* item = _player.currentItem;
+    return item != nil && (item.isPlaybackLikelyToKeepUp || [self bufferedAheadDuration] > 10.0);
+}
+
+// Frames advance: a rate > 0 with no data at the playhead is a stall about to happen
+- (BOOL)isMoving {
+    AVPlayerItem* item = _player.currentItem;
+    return item != nil && _player.rate > 0 && !item.isPlaybackBufferEmpty &&
+        [self bufferedAheadDuration] > 0;
 }
 
 - (void)observeValueForKeyPath:(NSString*)path
@@ -443,6 +455,14 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             _isPlaying) { //instance variable to handle overall state (changed to YES when user triggers playback)
             [self handleStalled];
         }
+
+        if (_eventSink != nil && _key != nil && _player.currentItem != nil) {
+            if ([self isMoving]) {
+                _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
+            } else if (_isPlaying && ![self canKeepPlaying]) {
+                _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+            }
+        }
     }
 
     if (context == timeRangeContext) {
@@ -462,6 +482,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                 [values addObject:@[ @(start), @(end) ]];
             }
             _eventSink(@{@"event" : @"bufferingUpdate", @"values" : values, @"key" : _key});
+            // Data arriving under a running player ends a rebuffer without a rate change
+            if (_key != nil && _isPlaying && [self isMoving]) {
+                _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
+            }
         }
     }
     else if (context == presentationSizeContext){
@@ -492,16 +516,20 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     } else if (context == playbackLikelyToKeepUpContext) {
         if ([[_player currentItem] isPlaybackLikelyToKeepUp]) {
             [self updatePlayingState];
-            if (_eventSink != nil) {
+            if (_eventSink != nil && _key != nil) {
                 _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
             }
         }
     } else if (context == playbackBufferEmptyContext) {
-        if (_eventSink != nil) {
-            _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+        if (_eventSink != nil && _key != nil) {
+            if ([[_player currentItem] isPlaybackBufferEmpty]) {
+                _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+            } else if ([self isMoving]) {
+                _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
+            }
         }
     } else if (context == playbackBufferFullContext) {
-        if (_eventSink != nil) {
+        if (_eventSink != nil && _key != nil && [[_player currentItem] isPlaybackBufferFull]) {
             _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
         }
     }
@@ -597,6 +625,8 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)play {
+    // The flag is reset below, so a scheduled check would run as a second chain
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startStalledCheck) object:nil];
     _stalledCount = 0;
     _isStalledCheckStarted = false;
     _isPlaying = true;
@@ -656,7 +686,8 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         if (!strongSelf) return;
 
         // Ensure that user not paused/swiped video while seek was in progress
-        if (wasPlaying && strongSelf->_isPlaying){
+        // (an interrupted seek is resumed by the seek that replaced it)
+        if (finished && wasPlaying && strongSelf->_isPlaying){
             [strongSelf play];
         }
     }];

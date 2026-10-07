@@ -225,7 +225,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           _applyPlayPause();
           break;
         case VideoEventType.completed:
-          value = value.copyWith(isPlaying: false, position: value.duration);
+          value = value.copyWith(
+              isPlaying: false, isBuffering: false, position: value.duration);
           _timer?.cancel();
           break;
         case VideoEventType.bufferingUpdate:
