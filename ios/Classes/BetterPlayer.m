@@ -443,6 +443,16 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             _isPlaying) { //instance variable to handle overall state (changed to YES when user triggers playback)
             [self handleStalled];
         }
+
+        // Buffering follows actual movement: handleStalled can resume before likelyToKeepUp turns YES
+        AVPlayerItem* item = _player.currentItem;
+        if (_eventSink != nil && _key != nil && item != nil) {
+            if (_player.rate > 0 && !item.isPlaybackBufferEmpty) {
+                _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
+            } else if (_isPlaying && !item.isPlaybackLikelyToKeepUp) {
+                _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+            }
+        }
     }
 
     if (context == timeRangeContext) {
@@ -492,16 +502,20 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     } else if (context == playbackLikelyToKeepUpContext) {
         if ([[_player currentItem] isPlaybackLikelyToKeepUp]) {
             [self updatePlayingState];
-            if (_eventSink != nil) {
+            if (_eventSink != nil && _key != nil) {
                 _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
             }
         }
     } else if (context == playbackBufferEmptyContext) {
-        if (_eventSink != nil) {
-            _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+        if (_eventSink != nil && _key != nil) {
+            if ([[_player currentItem] isPlaybackBufferEmpty]) {
+                _eventSink(@{@"event" : @"bufferingStart", @"key" : _key});
+            } else if (_player.rate > 0) {
+                _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
+            }
         }
     } else if (context == playbackBufferFullContext) {
-        if (_eventSink != nil) {
+        if (_eventSink != nil && _key != nil && [[_player currentItem] isPlaybackBufferFull]) {
             _eventSink(@{@"event" : @"bufferingEnd", @"key" : _key});
         }
     }
