@@ -17,7 +17,9 @@ import uz.shs.better_player_plus.DataSourceUtils.getUserAgent
 import uz.shs.better_player_plus.DataSourceUtils.isHTTP
 import uz.shs.better_player_plus.DataSourceUtils.getDataSourceFactory
 import io.flutter.plugin.common.EventChannel
+import io.flutter.view.TextureRegistry.SurfaceProducer
 import io.flutter.view.TextureRegistry.SurfaceTextureEntry
+import io.flutter.view.TextureRegistry.TextureEntry
 import io.flutter.plugin.common.MethodChannel
 import androidx.media3.ui.PlayerNotificationManager
 import androidx.work.WorkManager
@@ -47,6 +49,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.dash.DashMediaSource
@@ -76,7 +79,7 @@ import kotlin.math.min
 internal class BetterPlayer(
     context: Context,
     private val eventChannel: EventChannel,
-    private val textureEntry: SurfaceTextureEntry,
+    private val textureEntry: TextureEntry,
     customDefaultLoadControl: CustomDefaultLoadControl?,
     result: MethodChannel.Result
 ) {
@@ -86,6 +89,8 @@ internal class BetterPlayer(
     private val loadControl: LoadControl
     private var isInitialized = false
     private var surface: Surface? = null
+    private var needsSurface = true
+    private var isDisposed = false
     private var key: String? = null
     private var playerNotificationManager: PlayerNotificationManager? = null
     private var refreshHandler: Handler? = null
@@ -109,7 +114,8 @@ internal class BetterPlayer(
             this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
         )
         loadControl = loadBuilder.build()
-        exoPlayer = ExoPlayer.Builder(context)
+        val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+        exoPlayer = ExoPlayer.Builder(context, renderersFactory)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .build()
@@ -417,7 +423,7 @@ internal class BetterPlayer(
     }
 
     private fun setupVideoPlayer(
-        eventChannel: EventChannel, textureEntry: SurfaceTextureEntry, result: MethodChannel.Result
+        eventChannel: EventChannel, textureEntry: TextureEntry, result: MethodChannel.Result
     ) {
         eventChannel.setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -430,10 +436,17 @@ internal class BetterPlayer(
                 }
             },
         )
-        surface = Surface(textureEntry.surfaceTexture())
-        exoPlayer?.setVideoSurface(surface)
+        when (textureEntry) {
+            is SurfaceProducer -> attachSurfaceProducer(textureEntry)
+            is SurfaceTextureEntry -> {
+                surface = Surface(textureEntry.surfaceTexture())
+                exoPlayer?.setVideoSurface(surface)
+            }
+        }
         setAudioAttributes(exoPlayer, true)
         exoPlayer?.addListener(object : Player.Listener {
+            private var lastPlayWhenReady = false
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
@@ -466,8 +479,25 @@ internal class BetterPlayer(
                 }
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                val wasPlayWhenReady = lastPlayWhenReady
+                lastPlayWhenReady = playWhenReady
+                // Paused player still holds focus (its loss changes only the reason)
+                if (wasPlayWhenReady && !playWhenReady &&
+                    reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS
+                ) {
+                    val event: MutableMap<String, Any> = HashMap()
+                    event["event"] = "pause"
+                    eventSink.success(event)
+                }
+            }
+
             override fun onPlayerError(error: PlaybackException) {
-                eventSink.error("VideoError", "Video player had error $error", "")
+                eventSink.error(
+                    "VideoError",
+                    "Video player had error (${error.errorCodeName}) $error",
+                    error.errorCodeName
+                )
             }
         })
         val reply: MutableMap<String, Any> = HashMap()
@@ -700,16 +730,40 @@ internal class BetterPlayer(
         setAudioAttributes(exoPlayer, mixWithOthers)
     }
 
+    private fun attachSurfaceProducer(producer: SurfaceProducer) {
+        producer.setCallback(object : SurfaceProducer.Callback {
+            override fun onSurfaceAvailable() {
+                val player = exoPlayer
+                if (isDisposed || !needsSurface || player == null) return
+                player.setVideoSurface(producer.surface)
+                needsSurface = false
+                if (!player.isPlaying && player.playbackState == Player.STATE_READY) {
+                    player.seekTo(player.currentPosition)
+                }
+            }
+
+            override fun onSurfaceCleanup() {
+                if (isDisposed) return
+                exoPlayer?.setVideoSurface(null)
+                needsSurface = true
+            }
+        })
+        val producerSurface = producer.surface
+        exoPlayer?.setVideoSurface(producerSurface)
+        needsSurface = producerSurface == null
+    }
+
     fun dispose() {
+        isDisposed = true
         disposeMediaSession()
         disposeRemoteNotifications()
         if (isInitialized) {
             exoPlayer?.stop()
         }
-        textureEntry.release()
         eventChannel.setStreamHandler(null)
-        surface?.release()
         exoPlayer?.release()
+        surface?.release()
+        textureEntry.release()
     }
 
     override fun equals(other: Any?): Boolean {

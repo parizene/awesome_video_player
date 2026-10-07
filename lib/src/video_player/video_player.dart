@@ -168,10 +168,12 @@ class VideoPlayerValue {
 /// After [dispose] all further calls are ignored.
 class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   final BetterPlayerBufferingConfiguration bufferingConfiguration;
+  final bool useSurfaceProducer;
 
   /// Constructs a [VideoPlayerController] and creates video controller on platform side.
   VideoPlayerController({
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
+    this.useSurfaceProducer = false,
     bool autoCreate = true,
   }) : super(VideoPlayerValue(duration: null)) {
     if (autoCreate) {
@@ -201,6 +203,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   Future<void> _create() async {
     _textureId = await _videoPlayerPlatform.create(
       bufferingConfiguration: bufferingConfiguration,
+      useSurfaceProducer: useSurfaceProducer,
     );
     _creatingCompleter.complete(null);
 
@@ -620,8 +623,11 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     _videoPlayerPlatform.setAudioTrack(_textureId, name, index);
   }
 
-  void setMixWithOthers(bool mixWithOthers) {
-    _videoPlayerPlatform.setMixWithOthers(_textureId, mixWithOthers);
+  Future<void> setMixWithOthers(bool mixWithOthers) async {
+    if (!_created || _isDisposed) {
+      return;
+    }
+    await _videoPlayerPlatform.setMixWithOthers(_textureId, mixWithOthers);
   }
 
   static Future clearCache() async {

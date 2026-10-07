@@ -118,6 +118,11 @@ class BetterPlayerConfiguration {
   ///Default value is false.
   final bool useRootNavigator;
 
+  ///Android only: render frames through Flutter's SurfaceProducer instead of
+  ///the legacy SurfaceTexture. Takes effect when the native player is created.
+  ///Default value is false.
+  final bool useSurfaceProducer;
+
   const BetterPlayerConfiguration({
     this.aspectRatio,
     this.autoPlay = false,
@@ -156,6 +161,7 @@ class BetterPlayerConfiguration {
     this.autoDispose = true,
     this.expandToFill = true,
     this.useRootNavigator = false,
+    this.useSurfaceProducer = false,
   });
 
   BetterPlayerConfiguration copyWith({
@@ -188,6 +194,7 @@ class BetterPlayerConfiguration {
     bool? autoDispose,
     bool? expandToFill,
     bool? useRootNavigator,
+    bool? useSurfaceProducer,
   }) {
     return BetterPlayerConfiguration(
       aspectRatio: aspectRatio ?? this.aspectRatio,
@@ -228,6 +235,7 @@ class BetterPlayerConfiguration {
       autoDispose: autoDispose ?? this.autoDispose,
       expandToFill: expandToFill ?? this.expandToFill,
       useRootNavigator: useRootNavigator ?? this.useRootNavigator,
+      useSurfaceProducer: useSurfaceProducer ?? this.useSurfaceProducer,
     );
   }
 }

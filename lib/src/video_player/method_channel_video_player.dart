@@ -28,10 +28,12 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   @override
   Future<int?> create({
     BetterPlayerBufferingConfiguration? bufferingConfiguration,
+    bool useSurfaceProducer = false,
   }) async {
     late final Map<String, dynamic>? response;
     if (bufferingConfiguration == null) {
-      response = await _channel.invokeMapMethod<String, dynamic>('create');
+      response = await _channel.invokeMapMethod<String, dynamic>(
+          'create', <String, dynamic>{'useSurfaceProducer': useSurfaceProducer});
     } else {
       final responseLinkedHashMap = await _channel
           .invokeMethod<Map?>('create', <String, dynamic>{
@@ -40,6 +42,7 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             'bufferForPlaybackMs': bufferingConfiguration.bufferForPlaybackMs,
             'bufferForPlaybackAfterRebufferMs':
                 bufferingConfiguration.bufferForPlaybackAfterRebufferMs,
+            'useSurfaceProducer': useSurfaceProducer,
             if (bufferingConfiguration.maxBufferMs !=
                 BetterPlayerBufferingConfiguration.defaultMaxBufferMs)
               'preferredForwardBufferDurationMs':

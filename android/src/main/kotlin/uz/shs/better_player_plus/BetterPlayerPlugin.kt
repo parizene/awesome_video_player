@@ -104,7 +104,13 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         when (call.method) {
             INIT_METHOD -> disposeAllPlayers()
             CREATE_METHOD -> {
-                val handle = flutterState!!.textureRegistry!!.createSurfaceTexture()
+                val textureRegistry = flutterState!!.textureRegistry!!
+                val handle: TextureRegistry.TextureEntry =
+                    if (call.argument<Boolean>(USE_SURFACE_PRODUCER_PARAMETER) == true) {
+                        textureRegistry.createSurfaceProducer()
+                    } else {
+                        textureRegistry.createSurfaceTexture()
+                    }
                 val eventChannel = EventChannel(
                     flutterState?.binaryMessenger, EVENTS_CHANNEL + handle.id()
                 )
@@ -243,6 +249,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 if (mixWitOthers != null) {
                     player.setMixWithOthers(mixWitOthers)
                 }
+                result.success(null)
             }
 
             DISPOSE_METHOD -> {
@@ -539,6 +546,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val URI_PARAMETER = "uri"
         private const val FORMAT_HINT_PARAMETER = "formatHint"
         private const val TEXTURE_ID_PARAMETER = "textureId"
+        private const val USE_SURFACE_PRODUCER_PARAMETER = "useSurfaceProducer"
         private const val LOOPING_PARAMETER = "looping"
         private const val VOLUME_PARAMETER = "volume"
         private const val LOCATION_PARAMETER = "location"

@@ -250,7 +250,8 @@ class BetterPlayerController {
     if (videoPlayerController == null) {
       videoPlayerController = VideoPlayerController(
           bufferingConfiguration:
-              betterPlayerDataSource.bufferingConfiguration);
+              betterPlayerDataSource.bufferingConfiguration,
+          useSurfaceProducer: betterPlayerConfiguration.useSurfaceProducer);
       videoPlayerController?.addListener(_onVideoPlayerChanged);
     }
 
@@ -1256,12 +1257,12 @@ class BetterPlayerController {
   }
 
   ///Enable or disable audio mixing with other sound within device.
-  void setMixWithOthers(bool mixWithOthers) {
+  Future<void> setMixWithOthers(bool mixWithOthers) {
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
 
-    videoPlayerController!.setMixWithOthers(mixWithOthers);
+    return videoPlayerController!.setMixWithOthers(mixWithOthers);
   }
 
   ///Clear all cached data. Video player controller must be initialized to
