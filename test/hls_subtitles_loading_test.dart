@@ -508,4 +508,17 @@ no spaces around arrow
     expect(server.subtitleRequests(),
         ['/master_subs_eng.m3u8', '/master_subs_eng_00001.vtt']);
   });
+
+  test('stalled picked playlist: hides it and keeps current subtitles',
+      () async {
+    server.delays['/master_subs_deu.m3u8'] = const Duration(seconds: 60);
+    final controller = await setUpPlayer(preferredSubtitleLanguage: 'fra');
+    final fra = sourceFor(controller, 'fra');
+
+    await controller.setupSubtitleSource(sourceFor(controller, 'deu'));
+
+    expect(controller.betterPlayerSubtitlesSource, same(fra));
+    expect(lineTexts(controller), ['line in fra']);
+    expect(languages(controller), ['eng', 'fra']);
+  }, timeout: const Timeout(Duration(seconds: 30)));
 }

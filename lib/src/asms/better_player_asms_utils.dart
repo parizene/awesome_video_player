@@ -13,6 +13,9 @@ class BetterPlayerAsmsUtils {
   static final HttpClient _httpClient = HttpClient()
     ..connectionTimeout = const Duration(seconds: 5);
 
+  ///Maximum time to wait for a response, and then for its content.
+  static const Duration _responseTimeout = Duration(seconds: 10);
+
   ///Check if given url is HLS / DASH-type data source.
   static bool isDataSourceAsms(String url) =>
       isDataSourceHls(url) || isDataSourceDash(url);
@@ -40,25 +43,31 @@ class BetterPlayerAsmsUtils {
     String url, [
     Map<String, String?>? headers,
   ]) async {
+    HttpClientRequest? request;
     try {
-      final request = await _httpClient.getUrl(Uri.parse(url));
+      request = await _httpClient.getUrl(Uri.parse(url));
       if (headers != null) {
-        headers.forEach((name, value) => request.headers.add(name, value!));
+        headers.forEach((name, value) => request!.headers.add(name, value!));
       }
 
-      final response = await request.close();
+      final response = await request.close().timeout(_responseTimeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         BetterPlayerUtils.log(
             "GetDataFromUrl failed: HTTP ${response.statusCode}");
         return null;
       }
       var data = "";
-      await response.transform(const Utf8Decoder()).listen((content) {
-        data += content.toString();
-      }).asFuture<String?>();
+      await response
+          .transform(const Utf8Decoder())
+          .listen((content) {
+            data += content.toString();
+          })
+          .asFuture<String?>()
+          .timeout(_responseTimeout);
 
       return data;
     } on Exception catch (exception) {
+      request?.abort(exception);
       BetterPlayerUtils.log("GetDataFromUrl failed: $exception");
       return null;
     }
