@@ -114,6 +114,11 @@ internal class BetterPlayer(
             this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
         )
         loadControl = loadBuilder.build()
+        // Subtitles are rendered in Flutter and native text tracks are never shown,
+        // so ExoPlayer shouldn't select and download them (e.g. the HLS DEFAULT one).
+        trackSelector.setParameters(
+            trackSelector.buildUponParameters().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        )
         val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
         exoPlayer = ExoPlayer.Builder(context, renderersFactory)
             .setTrackSelector(trackSelector)
