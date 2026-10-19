@@ -574,7 +574,8 @@ class BetterPlayerController {
         return;
       }
       _asmsSegmentsLoading = true;
-      final BetterPlayerSubtitlesSource? source = _betterPlayerSubtitlesSource;
+      final int selection = _subtitlesSourceSelection;
+      final int dataSourceSetup = _dataSourceSetup;
       final Duration loadDurationEnd = Duration(
           milliseconds: position.inMilliseconds +
               5 * (_loadedSubtitlesSource?.asmsSegmentsTime ?? 5000));
@@ -597,13 +598,16 @@ class BetterPlayerController {
           urls: segmentsToLoad,
         ));
 
-        ///Additional check if current source of subtitles is same as source
-        ///used to start loading subtitles. It can be different when user
-        ///changes subtitles and there was already pending load.
-        if (source == _betterPlayerSubtitlesSource) {
-          subtitlesLines.addAll(subtitlesParsed);
-          _asmsSegmentsLoaded.addAll(segmentsToLoad);
+        ///Segments are ignored when subtitles were selected again, data source
+        ///was replaced or controller was disposed during the load. Selection
+        ///resets the loading flag, so it's not changed here either.
+        if (_disposed ||
+            selection != _subtitlesSourceSelection ||
+            dataSourceSetup != _dataSourceSetup) {
+          return;
         }
+        subtitlesLines.addAll(subtitlesParsed);
+        _asmsSegmentsLoaded.addAll(segmentsToLoad);
       }
       _asmsSegmentsLoading = false;
     } on Exception catch (exception) {

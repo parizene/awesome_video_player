@@ -8,7 +8,8 @@ import 'mock_method_channel.dart';
 
 /// Serves small HLS streams with three subtitle languages and records every
 /// request path, so tests can assert what the player downloads. A second
-/// episode is served under `/b/`.
+/// episode is served under `/b/`, and one with segmented subtitles (three
+/// 10 s WebVTT segments) under `/s/`.
 class _HlsFixtureServer {
   late HttpServer _server;
   final List<String> requests = [];
@@ -19,6 +20,9 @@ class _HlsFixtureServer {
 
   String get secondMasterUrl =>
       'http://127.0.0.1:${_server.port}/b/master.m3u8';
+
+  String get segmentedMasterUrl =>
+      'http://127.0.0.1:${_server.port}/s/master.m3u8';
 
   static const _master = '''#EXTM3U
 #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="eng",DEFAULT=YES,AUTOSELECT=YES,URI="master_subs_eng.m3u8"
@@ -37,6 +41,19 @@ master_subs_${lang}_00001.vtt
 #EXT-X-ENDLIST
 ''';
 
+  static String _segmentedSubsPlaylist(String lang) => '''#EXTM3U
+#EXT-X-TARGETDURATION:10
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:10,
+master_subs_${lang}_00001.vtt
+#EXTINF:10,
+master_subs_${lang}_00002.vtt
+#EXTINF:10,
+master_subs_${lang}_00003.vtt
+#EXT-X-ENDLIST
+''';
+
   static String _vtt(String text) => '''WEBVTT
 
 00:00:01.000 --> 00:00:03.000
@@ -50,16 +67,22 @@ $text
       requests.add(path);
       await Future<void>.delayed(delays[path] ?? Duration.zero);
       final response = request.response;
-      final match = RegExp(r'^(?:/b)?/master_subs_(\w{3})(_00001\.vtt|\.m3u8)$')
-          .firstMatch(path);
+      final match =
+          RegExp(r'^(/b|/s)?/master_subs_(\w{3})(?:_(\d{5})\.vtt|\.m3u8)$')
+              .firstMatch(path);
       if (failingPaths.contains(path)) {
         response.statusCode = HttpStatus.notFound;
-      } else if (path == '/master.m3u8' || path == '/b/master.m3u8') {
+      } else if (RegExp(r'^(/b|/s)?/master\.m3u8$').hasMatch(path)) {
         response.write(_master);
-      } else if (match != null && match.group(2) == '.m3u8') {
-        response.write(_subsPlaylist(match.group(1)!));
+      } else if (match != null && match.group(3) == null) {
+        response.write(match.group(1) == '/s'
+            ? _segmentedSubsPlaylist(match.group(2)!)
+            : _subsPlaylist(match.group(2)!));
       } else if (match != null) {
-        response.write(_vtt('line in ${match.group(1)}'));
+        final int segment = int.parse(match.group(3)!);
+        response.write(_vtt(segment == 1
+            ? 'line in ${match.group(2)}'
+            : 'line in ${match.group(2)} $segment'));
       } else {
         response.statusCode = HttpStatus.notFound;
       }
@@ -92,6 +115,7 @@ void main() {
   tearDown(() => server.stop());
 
   Future<BetterPlayerController> setUpPlayer({
+    String? url,
     String? preferredSubtitleLanguage,
     String? defaultSubtitleLanguage,
     bool forceDisableSubtitles = false,
@@ -101,7 +125,7 @@ void main() {
         BetterPlayerController(const BetterPlayerConfiguration());
     await controller.setupDataSource(BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
-      server.masterUrl,
+      url ?? server.masterUrl,
       videoFormat: BetterPlayerVideoFormat.hls,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
       defaultSubtitleLanguage: defaultSubtitleLanguage,
@@ -347,5 +371,46 @@ void main() {
     expect(languages(controller), ['eng', 'fra', 'deu']);
     expect(controller.betterPlayerSubtitlesSource?.language, 'fra');
     expect(lineTexts(controller), ['line in fra']);
+  });
+
+  void movePosition(BetterPlayerController controller, Duration position) {
+    final videoPlayerController = controller.videoPlayerController!;
+    videoPlayerController.value =
+        videoPlayerController.value.copyWith(position: position);
+  }
+
+  void delaySegments(String language, Duration delay) {
+    for (int segment = 1; segment <= 3; segment++) {
+      server.delays['/s/master_subs_${language}_0000$segment.vtt'] = delay;
+    }
+  }
+
+  test('segmented subtitles are not added after dispose', () async {
+    delaySegments('eng', const Duration(milliseconds: 100));
+    final controller = await setUpPlayer(
+        url: server.segmentedMasterUrl, preferredSubtitleLanguage: 'eng');
+
+    movePosition(controller, const Duration(seconds: 1));
+    controller.dispose();
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+
+    expect(lineTexts(controller), isEmpty);
+  });
+
+  test('segmented subtitles switched away and back add each cue once',
+      () async {
+    delaySegments('eng', const Duration(milliseconds: 200));
+    final controller = await setUpPlayer(
+        url: server.segmentedMasterUrl, preferredSubtitleLanguage: 'eng');
+    final eng = sourceFor(controller, 'eng');
+
+    movePosition(controller, const Duration(seconds: 1));
+    await controller.setupSubtitleSource(sourceFor(controller, 'deu'));
+    await controller.setupSubtitleSource(eng);
+    movePosition(controller, const Duration(seconds: 2));
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+
+    expect(lineTexts(controller),
+        ['line in eng', 'line in eng 2', 'line in eng 3']);
   });
 }
