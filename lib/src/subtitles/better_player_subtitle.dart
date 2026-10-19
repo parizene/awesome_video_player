@@ -29,7 +29,8 @@ class BetterPlayerSubtitle {
         return _handle3LinesAndMoreSubtitles(scanner, isWebVTT);
       }
       return BetterPlayerSubtitle._();
-    } on Exception catch (_) {
+    } catch (_) {
+      // Parsing throws errors, not only exceptions, on malformed cues.
       BetterPlayerUtils.log("Failed to parse subtitle line: $value");
       return BetterPlayerSubtitle._();
     }

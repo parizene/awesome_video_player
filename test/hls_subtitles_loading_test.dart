@@ -17,6 +17,9 @@ class _HlsFixtureServer {
 
   /// Paths answered with the master playlist instead of their own content.
   final Set<String> masterPlaylistPaths = {};
+
+  /// Paths answered with the given content instead of their own.
+  final Map<String, String> bodies = {};
   final Map<String, Duration> delays = {};
 
   String get masterUrl => 'http://127.0.0.1:${_server.port}/master.m3u8';
@@ -77,6 +80,8 @@ $text
         response.statusCode = HttpStatus.notFound;
       } else if (masterPlaylistPaths.contains(path)) {
         response.write(_master);
+      } else if (bodies.containsKey(path)) {
+        response.write(bodies[path]);
       } else if (RegExp(r'^(/b|/s)?/master\.m3u8$').hasMatch(path)) {
         response.write(_master);
       } else if (match != null && match.group(3) == null) {
@@ -429,5 +434,42 @@ void main() {
 
     expect(lineTexts(controller),
         ['line in eng', 'line in eng 2', 'line in eng 3']);
+  });
+
+  test('malformed subtitles playlist: hides it and falls back', () async {
+    server.bodies['/master_subs_fra.m3u8'] = '''#EXTM3U
+#EXT-X-TARGETDURATION:abc
+#EXTINF:90,
+master_subs_fra_00001.vtt
+#EXT-X-ENDLIST
+''';
+
+    final controller = await setUpPlayer(
+        preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');
+
+    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+    expect(lineTexts(controller), ['line in eng']);
+    expect(languages(controller), ['eng', 'deu']);
+  });
+
+  test('malformed cues are skipped and other cues are shown', () async {
+    server.bodies['/master_subs_deu_00001.vtt'] = '''WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+good line in deu
+
+xx:00:04.000 --> 00:00:05.000
+bad timestamp
+
+00:00:06.000-->00:00:07.000
+no spaces around arrow
+''';
+    final controller = await setUpPlayer(preferredSubtitleLanguage: 'fra');
+    final deu = sourceFor(controller, 'deu');
+
+    await controller.setupSubtitleSource(deu);
+
+    expect(controller.betterPlayerSubtitlesSource, same(deu));
+    expect(lineTexts(controller), ['good line in deu']);
   });
 }

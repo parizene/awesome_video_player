@@ -191,7 +191,8 @@ sealed class BetterPlayerHlsUtils {
           segmentsTime: targetDuration,
           segments: asmsSegments,
           isDefault: subtitle.isDefault);
-    } on Exception catch (exception) {
+    } catch (exception) {
+      // Parser throws errors, not only exceptions, on malformed playlists.
       BetterPlayerUtils.log('Failed to process subtitles playlist: $exception');
       return null;
     }
