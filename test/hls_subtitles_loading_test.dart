@@ -14,6 +14,9 @@ class _HlsFixtureServer {
   late HttpServer _server;
   final List<String> requests = [];
   final Set<String> failingPaths = {};
+
+  /// Paths answered with the master playlist instead of their own content.
+  final Set<String> masterPlaylistPaths = {};
   final Map<String, Duration> delays = {};
 
   String get masterUrl => 'http://127.0.0.1:${_server.port}/master.m3u8';
@@ -72,6 +75,8 @@ $text
               .firstMatch(path);
       if (failingPaths.contains(path)) {
         response.statusCode = HttpStatus.notFound;
+      } else if (masterPlaylistPaths.contains(path)) {
+        response.write(_master);
       } else if (RegExp(r'^(/b|/s)?/master\.m3u8$').hasMatch(path)) {
         response.write(_master);
       } else if (match != null && match.group(3) == null) {
@@ -195,6 +200,18 @@ void main() {
   test('preferred playlist fails: hides it and falls back to default language',
       () async {
     server.failingPaths.add('/master_subs_fra.m3u8');
+
+    final controller = await setUpPlayer(
+        preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');
+
+    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+    expect(lineTexts(controller), ['line in eng']);
+    expect(languages(controller), ['eng', 'deu']);
+  });
+
+  test('preferred playlist is not a media playlist: hides it and falls back',
+      () async {
+    server.masterPlaylistPaths.add('/master_subs_fra.m3u8');
 
     final controller = await setUpPlayer(
         preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');

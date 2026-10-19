@@ -139,7 +139,11 @@ sealed class BetterPlayerHlsUtils {
 
       final parsedSubtitle =
           await hlsPlaylistParser.parseString(playlistUri, subtitleData);
-      final hlsMediaPlaylist = parsedSubtitle as HlsMediaPlaylist;
+      if (parsedSubtitle is! HlsMediaPlaylist) {
+        BetterPlayerUtils.log('Subtitles playlist is not a media playlist');
+        return null;
+      }
+      final hlsMediaPlaylist = parsedSubtitle;
       final hlsSubtitlesUrls = <String>[];
 
       final List<BetterPlayerAsmsSubtitleSegment> asmsSegments = [];
