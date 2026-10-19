@@ -23,12 +23,15 @@ class BetterPlayerAsmsUtils {
   ///Check if given url is DASH-type data source.
   static bool isDataSourceDash(String url) => url.contains(_dashExtension);
 
-  ///Parse playlist based on type of stream.
+  ///Parse playlist based on type of stream. When [loadSubtitlesPlaylists] is
+  ///false, subtitles playlists are not loaded.
   static Future<BetterPlayerAsmsDataHolder> parse(
     String data,
-    String masterPlaylistUrl,
-  ) async {
-    return BetterPlayerHlsUtils.parse(data, masterPlaylistUrl);
+    String masterPlaylistUrl, {
+    bool loadSubtitlesPlaylists = true,
+  }) async {
+    return BetterPlayerHlsUtils.parse(data, masterPlaylistUrl,
+        loadSubtitlesPlaylists: loadSubtitlesPlaylists);
   }
 
   ///Request data from given uri along with headers. May return null if resource

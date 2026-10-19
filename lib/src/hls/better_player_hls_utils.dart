@@ -16,15 +16,19 @@ import 'package:awesome_video_player/src/hls/hls_parser/util.dart';
 sealed class BetterPlayerHlsUtils {
   BetterPlayerHlsUtils._();
 
+  ///Parse HLS master playlist. When [loadSubtitlesPlaylists] is false,
+  ///subtitles playlists are not loaded, see [parseSubtitles].
   static Future<BetterPlayerAsmsDataHolder> parse(
-      String data, String masterPlaylistUrl) async {
+      String data, String masterPlaylistUrl,
+      {bool loadSubtitlesPlaylists = true}) async {
     List<BetterPlayerAsmsTrack> tracks = [];
     List<BetterPlayerAsmsSubtitle> subtitles = [];
     List<BetterPlayerAsmsAudioTrack> audios = [];
     try {
       final List<List<dynamic>> list = await Future.wait([
         parseTracks(data, masterPlaylistUrl),
-        parseSubtitles(data, masterPlaylistUrl),
+        parseSubtitles(data, masterPlaylistUrl,
+            loadSubtitlesPlaylists: loadSubtitlesPlaylists),
         parseLanguages(data, masterPlaylistUrl)
       ]);
       tracks = list[0] as List<BetterPlayerAsmsTrack>;
@@ -71,9 +75,13 @@ sealed class BetterPlayerHlsUtils {
     return tracks;
   }
 
-  ///Parse subtitles from provided m3u8 url
+  ///Parse subtitles from provided m3u8 url. When [loadSubtitlesPlaylists] is
+  ///false, subtitles playlists are not loaded: each subtitle has only name,
+  ///language and playlist url, so playlists of subtitles which are never
+  ///selected are never downloaded.
   static Future<List<BetterPlayerAsmsSubtitle>> parseSubtitles(
-      String data, String masterPlaylistUrl) async {
+      String data, String masterPlaylistUrl,
+      {bool loadSubtitlesPlaylists = true}) async {
     final List<BetterPlayerAsmsSubtitle> subtitles = [];
     try {
       final parsedPlaylist = await HlsPlaylistParser.create()
@@ -81,7 +89,13 @@ sealed class BetterPlayerHlsUtils {
 
       if (parsedPlaylist is HlsMasterPlaylist) {
         for (final Rendition element in parsedPlaylist.subtitles) {
-          final hlsSubtitle = await _parseSubtitlesPlaylist(element);
+          final BetterPlayerAsmsSubtitle subtitle =
+              _subtitleFromRendition(element);
+          if (!loadSubtitlesPlaylists) {
+            subtitles.add(subtitle);
+            continue;
+          }
+          final hlsSubtitle = await parseSubtitlesPlaylist(subtitle);
           if (hlsSubtitle != null) {
             subtitles.add(hlsSubtitle);
           }
@@ -94,24 +108,37 @@ sealed class BetterPlayerHlsUtils {
     return subtitles;
   }
 
-  ///Parse HLS subtitles playlist. If subtitles are segmented (more than 1
+  ///Build subtitle from given [rendition] of master playlist, without loading
+  ///its playlist.
+  static BetterPlayerAsmsSubtitle _subtitleFromRendition(Rendition rendition) {
+    return BetterPlayerAsmsSubtitle(
+      name: rendition.format.label,
+      language: rendition.format.language,
+      url: rendition.url.toString(),
+      isDefault: _isDefaultRendition(rendition),
+    );
+  }
+
+  ///Load and parse HLS playlist of given [subtitle], which has to contain
+  ///playlist url. If subtitles are segmented (more than 1
   ///segment is present in playlist), then setup subtitles as segmented.
   ///Segmented subtitles are loading with JIT policy, when video is playing
   ///to prevent massive load od video start. Segmented subtitles will have
   ///filled segments list which contains start, end and url of subtitles based
   ///on time in playlist.
-  static Future<BetterPlayerAsmsSubtitle?> _parseSubtitlesPlaylist(
-      Rendition rendition) async {
+  static Future<BetterPlayerAsmsSubtitle?> parseSubtitlesPlaylist(
+      BetterPlayerAsmsSubtitle subtitle) async {
     try {
       final HlsPlaylistParser hlsPlaylistParser = HlsPlaylistParser.create();
+      final Uri playlistUri = Uri.parse(subtitle.url!);
       final subtitleData =
-          await BetterPlayerAsmsUtils.getDataFromUrl(rendition.url.toString());
+          await BetterPlayerAsmsUtils.getDataFromUrl(subtitle.url!);
       if (subtitleData == null) {
         return null;
       }
 
       final parsedSubtitle =
-          await hlsPlaylistParser.parseString(rendition.url, subtitleData);
+          await hlsPlaylistParser.parseString(playlistUri, subtitleData);
       final hlsMediaPlaylist = parsedSubtitle as HlsMediaPlaylist;
       final hlsSubtitlesUrls = <String>[];
 
@@ -119,7 +146,7 @@ sealed class BetterPlayerHlsUtils {
       final bool isSegmented = hlsMediaPlaylist.segments.length > 1;
       int microSecondsFromStart = 0;
       for (final Segment segment in hlsMediaPlaylist.segments) {
-        final split = rendition.url.toString().split('/');
+        final split = subtitle.url!.split('/');
         var realUrl = '';
         for (var index = 0; index < split.length - 1; index++) {
           // ignore: use_string_buffers
@@ -151,26 +178,27 @@ sealed class BetterPlayerHlsUtils {
         targetDuration = parsedSubtitle.targetDurationUs! ~/ 1000;
       }
 
-      bool isDefault = false;
-
-      if (rendition.format.selectionFlags != null) {
-        isDefault =
-            Util.checkBitPositionIsSet(rendition.format.selectionFlags!, 1);
-      }
-
       return BetterPlayerAsmsSubtitle(
-          name: rendition.format.label,
-          language: rendition.format.language,
-          url: rendition.url.toString(),
+          name: subtitle.name,
+          language: subtitle.language,
+          url: subtitle.url,
           realUrls: hlsSubtitlesUrls,
           isSegmented: isSegmented,
           segmentsTime: targetDuration,
           segments: asmsSegments,
-          isDefault: isDefault);
+          isDefault: subtitle.isDefault);
     } on Exception catch (exception) {
       BetterPlayerUtils.log('Failed to process subtitles playlist: $exception');
       return null;
     }
+  }
+
+  ///Check if given [rendition] is marked as DEFAULT in master playlist.
+  static bool _isDefaultRendition(Rendition rendition) {
+    if (rendition.format.selectionFlags == null) {
+      return false;
+    }
+    return Util.checkBitPositionIsSet(rendition.format.selectionFlags!, 1);
   }
 
   static Future<List<BetterPlayerAsmsAudioTrack>> parseLanguages(

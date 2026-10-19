@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:awesome_video_player/awesome_video_player.dart';
 import 'package:awesome_video_player/src/configuration/better_player_controller_event.dart';
 import 'package:awesome_video_player/src/core/better_player_utils.dart';
+import 'package:awesome_video_player/src/hls/better_player_hls_utils.dart';
 import 'package:awesome_video_player/src/subtitles/better_player_subtitle.dart';
 import 'package:awesome_video_player/src/subtitles/better_player_subtitles_factory.dart';
 import 'package:awesome_video_player/src/video_player/video_player.dart';
@@ -209,6 +210,34 @@ class BetterPlayerController {
   ///List of loaded ASMS segments
   final List<String> _asmsSegmentsLoaded = [];
 
+  ///Subtitles sources with ASMS playlist loaded on selection, by source from
+  ///[betterPlayerSubtitlesSourceList]. Used when
+  ///[BetterPlayerDataSource.lazyLoadAsmsSubtitles] is enabled.
+  final Map<BetterPlayerSubtitlesSource, BetterPlayerSubtitlesSource>
+      _asmsSubtitlesSourcesLoaded = {};
+
+  ///Pending loads of ASMS playlists, by subtitles source, so a playlist is
+  ///downloaded once even when subtitles are selected again during the load.
+  final Map<BetterPlayerSubtitlesSource, Future<BetterPlayerSubtitlesSource?>>
+      _asmsSubtitlesPlaylistsLoading = {};
+
+  ///Last subtitles source which was set up successfully. Restored when
+  ///selected ASMS subtitles playlist couldn't be loaded.
+  BetterPlayerSubtitlesSource? _appliedSubtitlesSource;
+
+  ///Number of the latest subtitles selection. Results of earlier selections
+  ///which finish loading later are ignored.
+  int _subtitlesSourceSelection = 0;
+
+  ///Number of the latest data source setup. Subtitles loaded for an earlier
+  ///setup are ignored.
+  int _dataSourceSetup = 0;
+
+  ///Current subtitles source, with loaded ASMS playlist.
+  BetterPlayerSubtitlesSource? get _loadedSubtitlesSource =>
+      _asmsSubtitlesSourcesLoaded[_betterPlayerSubtitlesSource] ??
+      _betterPlayerSubtitlesSource;
+
   ///Currently displayed [BetterPlayerSubtitle].
   BetterPlayerSubtitle? renderedSubtitle;
 
@@ -245,6 +274,10 @@ class BetterPlayerController {
     _userPickedSubtitle = false;
     _betterPlayerDataSource = betterPlayerDataSource;
     _betterPlayerSubtitlesSourceList.clear();
+    _asmsSubtitlesSourcesLoaded.clear();
+    _asmsSubtitlesPlaylistsLoading.clear();
+    _appliedSubtitlesSource = null;
+    _dataSourceSetup++;
 
     ///Build videoPlayerController if null
     if (videoPlayerController == null) {
@@ -266,11 +299,12 @@ class BetterPlayerController {
           .addAll(betterPlayerDataSource.subtitles!);
     }
 
+    final int dataSourceSetup = _dataSourceSetup;
     final Future<void> subtitlesFuture = _isDataSourceAsms(betterPlayerDataSource)
-        ? _setupAsmsDataSource(betterPlayerDataSource)
+        ? _setupAsmsDataSource(betterPlayerDataSource, dataSourceSetup)
             .catchError((dynamic _) {})
-            .then((_) => _setupSubtitles())
-        : _setupSubtitles();
+            .then((_) => _setupSubtitles(dataSourceSetup))
+        : _setupSubtitles(dataSourceSetup);
 
     await _setupDataSource(betterPlayerDataSource);
     await subtitlesFuture.timeout(
@@ -282,8 +316,10 @@ class BetterPlayerController {
     setTrack(BetterPlayerAsmsTrack.defaultTrack());
   }
 
-  ///Configure subtitles based on subtitles source.
-  Future<void> _setupSubtitles() async {
+  ///Configure subtitles based on subtitles source. Skipped when data source
+  ///setup [dataSourceSetup] was replaced by a newer one.
+  Future<void> _setupSubtitles(int dataSourceSetup) async {
+    if (dataSourceSetup != _dataSourceSetup) return;
     _betterPlayerSubtitlesSourceList.add(
       BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
     );
@@ -341,15 +377,24 @@ class BetterPlayerController {
 
   ///Configure HLS / DASH data source based on provided data source and configuration.
   ///This method configures tracks, subtitles and audio tracks from given
-  ///master playlist.
-  Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
+  ///master playlist. Skipped when data source setup [dataSourceSetup] was
+  ///replaced by a newer one.
+  Future _setupAsmsDataSource(
+      BetterPlayerDataSource source, int dataSourceSetup) async {
     final String? data = await BetterPlayerAsmsUtils.getDataFromUrl(
       betterPlayerDataSource!.url,
       _getHeaders(),
     );
-    if (data != null) {
+    if (data != null && dataSourceSetup == _dataSourceSetup) {
       final BetterPlayerAsmsDataHolder _response =
-          await BetterPlayerAsmsUtils.parse(data, betterPlayerDataSource!.url);
+          await BetterPlayerAsmsUtils.parse(
+        data,
+        betterPlayerDataSource!.url,
+        loadSubtitlesPlaylists: !betterPlayerDataSource!.lazyLoadAsmsSubtitles,
+      );
+      if (dataSourceSetup != _dataSourceSetup) {
+        return;
+      }
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {
@@ -371,6 +416,8 @@ class BetterPlayerController {
               asmsSegmentsTime: asmsSubtitle.segmentsTime,
               asmsSegments: asmsSubtitle.segments,
               selectedByDefault: asmsSubtitle.isDefault,
+              asmsPlaylistUrl:
+                  asmsSubtitle.realUrls == null ? asmsSubtitle.url : null,
             ),
           );
         });
@@ -395,19 +442,44 @@ class BetterPlayerController {
     if (!sourceInitialize) {
       _userPickedSubtitle = true;
     }
+    final int selection = ++_subtitlesSourceSelection;
+    final int dataSourceSetup = _dataSourceSetup;
     _betterPlayerSubtitlesSource = subtitlesSource;
     subtitlesLines.clear();
     _asmsSegmentsLoaded.clear();
     _asmsSegmentsLoading = false;
 
     if (subtitlesSource.type != BetterPlayerSubtitlesSourceType.none) {
-      if (subtitlesSource.asmsIsSegmented == true) {
+      final BetterPlayerSubtitlesSource? loadedSource =
+          await _loadAsmsSubtitlesPlaylist(subtitlesSource);
+      if (_disposed || dataSourceSetup != _dataSourceSetup) {
+        return;
+      }
+      if (loadedSource == null) {
+        ///Failed subtitles are removed from the list, same as when playlist
+        ///fails during data source setup.
+        _betterPlayerSubtitlesSourceList.remove(subtitlesSource);
+      }
+      if (selection != _subtitlesSourceSelection) {
+        return;
+      }
+      if (loadedSource == null) {
+        return _onAsmsSubtitlesPlaylistFailed(sourceInitialize);
+      }
+      if (loadedSource.asmsIsSegmented == true) {
+        _appliedSubtitlesSource = subtitlesSource;
         return;
       }
       final subtitlesParsed =
-          await BetterPlayerSubtitlesFactory.parseSubtitles(subtitlesSource);
+          await BetterPlayerSubtitlesFactory.parseSubtitles(loadedSource);
+      if (_disposed ||
+          selection != _subtitlesSourceSelection ||
+          dataSourceSetup != _dataSourceSetup) {
+        return;
+      }
       subtitlesLines.addAll(subtitlesParsed);
     }
+    _appliedSubtitlesSource = subtitlesSource;
 
     _postEvent(BetterPlayerEvent(
       BetterPlayerEventType.changedSubtitles,
@@ -421,6 +493,72 @@ class BetterPlayerController {
     if (!_disposed && !sourceInitialize) {
       _postControllerEvent(BetterPlayerControllerEvent.changeSubtitles);
     }
+  }
+
+  ///Load ASMS playlist of given [subtitlesSource] if it was not loaded during
+  ///data source setup. Returns source with loaded playlist or null if playlist
+  ///couldn't be loaded.
+  Future<BetterPlayerSubtitlesSource?> _loadAsmsSubtitlesPlaylist(
+      BetterPlayerSubtitlesSource subtitlesSource) async {
+    final String? playlistUrl = subtitlesSource.asmsPlaylistUrl;
+    if (playlistUrl == null) {
+      return subtitlesSource;
+    }
+    final BetterPlayerSubtitlesSource? cachedSource =
+        _asmsSubtitlesSourcesLoaded[subtitlesSource];
+    if (cachedSource != null) {
+      return cachedSource;
+    }
+    return _asmsSubtitlesPlaylistsLoading[subtitlesSource] ??=
+        _downloadAsmsSubtitlesPlaylist(subtitlesSource, playlistUrl);
+  }
+
+  ///Download ASMS playlist of given [subtitlesSource] from [playlistUrl].
+  ///Returns source with loaded playlist or null if playlist couldn't be
+  ///loaded.
+  Future<BetterPlayerSubtitlesSource?> _downloadAsmsSubtitlesPlaylist(
+      BetterPlayerSubtitlesSource subtitlesSource, String playlistUrl) async {
+    final int dataSourceSetup = _dataSourceSetup;
+    final BetterPlayerAsmsSubtitle? asmsSubtitle =
+        await BetterPlayerHlsUtils.parseSubtitlesPlaylist(
+            BetterPlayerAsmsSubtitle(url: playlistUrl));
+    if (asmsSubtitle == null || dataSourceSetup != _dataSourceSetup) {
+      return null;
+    }
+    final BetterPlayerSubtitlesSource loadedSource =
+        BetterPlayerSubtitlesSource(
+      type: subtitlesSource.type,
+      name: subtitlesSource.name,
+      language: subtitlesSource.language,
+      urls: asmsSubtitle.realUrls,
+      selectedByDefault: subtitlesSource.selectedByDefault,
+      headers: subtitlesSource.headers,
+      asmsIsSegmented: asmsSubtitle.isSegmented,
+      asmsSegmentsTime: asmsSubtitle.segmentsTime,
+      asmsSegments: asmsSubtitle.segments,
+    );
+    _asmsSubtitlesSourcesLoaded[subtitlesSource] = loadedSource;
+    return loadedSource;
+  }
+
+  ///Handle selected ASMS subtitles which playlist couldn't be loaded. On init
+  ///the next matching subtitles are selected, otherwise the last subtitles
+  ///which were set up successfully are restored.
+  Future<void> _onAsmsSubtitlesPlaylistFailed(bool sourceInitialize) async {
+    final BetterPlayerSubtitlesSource? noneSource =
+        _betterPlayerSubtitlesSourceList.firstWhereOrNull(
+            (s) => s.type == BetterPlayerSubtitlesSourceType.none);
+    final BetterPlayerSubtitlesSource? appliedSource =
+        _betterPlayerSubtitlesSourceList.contains(_appliedSubtitlesSource)
+            ? _appliedSubtitlesSource
+            : null;
+    final BetterPlayerSubtitlesSource? nextSource = sourceInitialize
+        ? _resolveInitialSubtitleSource() ?? noneSource
+        : appliedSource ?? noneSource;
+    if (nextSource == null) {
+      return;
+    }
+    await setupSubtitleSource(nextSource, sourceInitialize: sourceInitialize);
   }
 
   ///Load ASMS subtitles segments for given [position].
@@ -439,9 +577,9 @@ class BetterPlayerController {
       final BetterPlayerSubtitlesSource? source = _betterPlayerSubtitlesSource;
       final Duration loadDurationEnd = Duration(
           milliseconds: position.inMilliseconds +
-              5 * (_betterPlayerSubtitlesSource?.asmsSegmentsTime ?? 5000));
+              5 * (_loadedSubtitlesSource?.asmsSegmentsTime ?? 5000));
 
-      final segmentsToLoad = _betterPlayerSubtitlesSource?.asmsSegments
+      final segmentsToLoad = _loadedSubtitlesSource?.asmsSegments
           ?.where((segment) {
             return segment.startTime > position &&
                 segment.endTime < loadDurationEnd &&
@@ -846,7 +984,7 @@ class BetterPlayerController {
       videoPlayerController?.refresh();
     }
 
-    if (_betterPlayerSubtitlesSource?.asmsIsSegmented == true) {
+    if (_loadedSubtitlesSource?.asmsIsSegmented == true) {
       _loadAsmsSubtitlesSegments(currentVideoPlayerValue.position);
     }
 

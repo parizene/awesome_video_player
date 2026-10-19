@@ -29,6 +29,11 @@ class BetterPlayerDataSource {
   ///Should player use hls / dash subtitles (ASMS - Adaptive Streaming Media Sources).
   final bool? useAsmsSubtitles;
 
+  ///Should player load hls subtitles playlists only when subtitles are
+  ///selected. When false, playlists of all subtitles are loaded during data
+  ///source setup.
+  final bool lazyLoadAsmsSubtitles;
+
   ///Should player use hls tracks
   final bool? useAsmsTracks;
 
@@ -102,6 +107,7 @@ class BetterPlayerDataSource {
     this.liveStream = false,
     this.headers,
     this.useAsmsSubtitles = true,
+    this.lazyLoadAsmsSubtitles = false,
     this.useAsmsTracks = true,
     this.useAsmsAudioTracks = true,
     this.asmsTrackNames,
@@ -136,6 +142,7 @@ class BetterPlayerDataSource {
     bool? liveStream,
     Map<String, String>? headers,
     bool? useAsmsSubtitles,
+    bool lazyLoadAsmsSubtitles = false,
     bool? useAsmsTracks,
     bool? useAsmsAudioTracks,
     Map<String, String>? qualities,
@@ -159,6 +166,7 @@ class BetterPlayerDataSource {
       liveStream: liveStream,
       headers: headers,
       useAsmsSubtitles: useAsmsSubtitles,
+      lazyLoadAsmsSubtitles: lazyLoadAsmsSubtitles,
       useAsmsTracks: useAsmsTracks,
       useAsmsAudioTracks: useAsmsAudioTracks,
       resolutions: qualities,
@@ -242,6 +250,7 @@ class BetterPlayerDataSource {
     bool? liveStream,
     Map<String, String>? headers,
     bool? useAsmsSubtitles,
+    bool? lazyLoadAsmsSubtitles,
     bool? useAsmsTracks,
     bool? useAsmsAudioTracks,
     Map<String, String>? resolutions,
@@ -267,6 +276,8 @@ class BetterPlayerDataSource {
       liveStream: liveStream ?? this.liveStream,
       headers: headers ?? this.headers,
       useAsmsSubtitles: useAsmsSubtitles ?? this.useAsmsSubtitles,
+      lazyLoadAsmsSubtitles:
+          lazyLoadAsmsSubtitles ?? this.lazyLoadAsmsSubtitles,
       useAsmsTracks: useAsmsTracks ?? this.useAsmsTracks,
       useAsmsAudioTracks: useAsmsAudioTracks ?? this.useAsmsAudioTracks,
       resolutions: resolutions ?? this.resolutions,

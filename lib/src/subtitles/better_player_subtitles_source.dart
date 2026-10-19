@@ -39,6 +39,11 @@ class BetterPlayerSubtitlesSource {
   ///configured manually.
   final List<BetterPlayerAsmsSubtitleSegment>? asmsSegments;
 
+  ///Url of ASMS subtitles playlist which is loaded when subtitles are
+  ///selected. Set only when playlist was not loaded during data source setup.
+  ///This shouldn't be configured manually.
+  final String? asmsPlaylistUrl;
+
   BetterPlayerSubtitlesSource({
     this.type,
     this.name = "Default subtitles",
@@ -50,6 +55,7 @@ class BetterPlayerSubtitlesSource {
     this.asmsIsSegmented,
     this.asmsSegmentsTime,
     this.asmsSegments,
+    this.asmsPlaylistUrl,
   });
 
   ///Creates list with only one subtitles
