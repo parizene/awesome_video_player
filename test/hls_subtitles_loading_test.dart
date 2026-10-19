@@ -202,29 +202,39 @@ void main() {
     ]);
   });
 
-  test('preferred playlist fails: hides it and falls back to default language',
-      () async {
-    server.failingPaths.add('/master_subs_fra.m3u8');
+  for (final bool lazy in [true, false]) {
+    test(
+        'preferred playlist fails: hides it and falls back to default language (lazy loading: $lazy)',
+        () async {
+      server.failingPaths.add('/master_subs_fra.m3u8');
 
-    final controller = await setUpPlayer(
-        preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');
+      final controller = await setUpPlayer(
+          lazyLoadAsmsSubtitles: lazy,
+          preferredSubtitleLanguage: 'fra',
+          defaultSubtitleLanguage: 'eng');
 
-    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
-    expect(lineTexts(controller), ['line in eng']);
-    expect(languages(controller), ['eng', 'deu']);
-  });
+      expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+      expect(lineTexts(controller), ['line in eng']);
+      expect(languages(controller), ['eng', 'deu']);
+    });
+  }
 
-  test('preferred playlist is not a media playlist: hides it and falls back',
-      () async {
-    server.masterPlaylistPaths.add('/master_subs_fra.m3u8');
+  for (final bool lazy in [true, false]) {
+    test(
+        'preferred playlist is not a media playlist: hides it and falls back (lazy loading: $lazy)',
+        () async {
+      server.masterPlaylistPaths.add('/master_subs_fra.m3u8');
 
-    final controller = await setUpPlayer(
-        preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');
+      final controller = await setUpPlayer(
+          lazyLoadAsmsSubtitles: lazy,
+          preferredSubtitleLanguage: 'fra',
+          defaultSubtitleLanguage: 'eng');
 
-    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
-    expect(lineTexts(controller), ['line in eng']);
-    expect(languages(controller), ['eng', 'deu']);
-  });
+      expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+      expect(lineTexts(controller), ['line in eng']);
+      expect(languages(controller), ['eng', 'deu']);
+    });
+  }
 
   test('picked playlist fails: hides it and keeps current subtitles', () async {
     server.failingPaths.add('/master_subs_deu.m3u8');
@@ -407,50 +417,67 @@ void main() {
     }
   }
 
-  test('segmented subtitles are not added after dispose', () async {
-    delaySegments('eng', const Duration(milliseconds: 100));
-    final controller = await setUpPlayer(
-        url: server.segmentedMasterUrl, preferredSubtitleLanguage: 'eng');
+  for (final bool lazy in [true, false]) {
+    test(
+        'segmented subtitles are not added after dispose (lazy loading: $lazy)',
+        () async {
+      delaySegments('eng', const Duration(milliseconds: 100));
+      final controller = await setUpPlayer(
+          lazyLoadAsmsSubtitles: lazy,
+          url: server.segmentedMasterUrl,
+          preferredSubtitleLanguage: 'eng');
 
-    movePosition(controller, const Duration(seconds: 1));
-    controller.dispose();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
+      movePosition(controller, const Duration(seconds: 1));
+      controller.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 600));
 
-    expect(lineTexts(controller), isEmpty);
-  });
+      expect(lineTexts(controller), isEmpty);
+    });
+  }
 
-  test('segmented subtitles switched away and back add each cue once',
-      () async {
-    delaySegments('eng', const Duration(milliseconds: 200));
-    final controller = await setUpPlayer(
-        url: server.segmentedMasterUrl, preferredSubtitleLanguage: 'eng');
-    final eng = sourceFor(controller, 'eng');
+  for (final bool lazy in [true, false]) {
+    test(
+        'segmented subtitles switched away and back add each cue once (lazy loading: $lazy)',
+        () async {
+      delaySegments('eng', const Duration(milliseconds: 200));
+      final controller = await setUpPlayer(
+          lazyLoadAsmsSubtitles: lazy,
+          url: server.segmentedMasterUrl,
+          preferredSubtitleLanguage: 'eng');
+      final eng = sourceFor(controller, 'eng');
 
-    movePosition(controller, const Duration(seconds: 1));
-    await controller.setupSubtitleSource(sourceFor(controller, 'deu'));
-    await controller.setupSubtitleSource(eng);
-    movePosition(controller, const Duration(seconds: 2));
-    await Future<void>.delayed(const Duration(milliseconds: 1500));
+      movePosition(controller, const Duration(seconds: 1));
+      await controller.setupSubtitleSource(sourceFor(controller, 'deu'));
+      await controller.setupSubtitleSource(eng);
+      movePosition(controller, const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
 
-    expect(lineTexts(controller),
-        ['line in eng', 'line in eng 2', 'line in eng 3']);
-  });
+      expect(lineTexts(controller),
+          ['line in eng', 'line in eng 2', 'line in eng 3']);
+    });
+  }
 
-  test('malformed subtitles playlist: hides it and falls back', () async {
-    server.bodies['/master_subs_fra.m3u8'] = '''#EXTM3U
-#EXT-X-TARGETDURATION:abc
-#EXTINF:90,
-master_subs_fra_00001.vtt
-#EXT-X-ENDLIST
-''';
+  for (final bool lazy in [true, false]) {
+    test(
+        'malformed subtitles playlist: hides it and falls back (lazy loading: $lazy)',
+        () async {
+      server.bodies['/master_subs_fra.m3u8'] = '''#EXTM3U
+  #EXT-X-TARGETDURATION:abc
+  #EXTINF:90,
+  master_subs_fra_00001.vtt
+  #EXT-X-ENDLIST
+  ''';
 
-    final controller = await setUpPlayer(
-        preferredSubtitleLanguage: 'fra', defaultSubtitleLanguage: 'eng');
+      final controller = await setUpPlayer(
+          lazyLoadAsmsSubtitles: lazy,
+          preferredSubtitleLanguage: 'fra',
+          defaultSubtitleLanguage: 'eng');
 
-    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
-    expect(lineTexts(controller), ['line in eng']);
-    expect(languages(controller), ['eng', 'deu']);
-  });
+      expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+      expect(lineTexts(controller), ['line in eng']);
+      expect(languages(controller), ['eng', 'deu']);
+    });
+  }
 
   test('malformed cues are skipped and other cues are shown', () async {
     server.bodies['/master_subs_deu_00001.vtt'] = '''WEBVTT
@@ -471,5 +498,14 @@ no spaces around arrow
 
     expect(controller.betterPlayerSubtitlesSource, same(deu));
     expect(lineTexts(controller), ['good line in deu']);
+  });
+
+  test('HLS DEFAULT subtitles are selected when no language is set', () async {
+    final controller = await setUpPlayer();
+
+    expect(controller.betterPlayerSubtitlesSource?.language, 'eng');
+    expect(lineTexts(controller), ['line in eng']);
+    expect(server.subtitleRequests(),
+        ['/master_subs_eng.m3u8', '/master_subs_eng_00001.vtt']);
   });
 }
